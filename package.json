@@ -1,0 +1,24 @@
+{
+  "name": "@nstdata-ai/crawl",
+  "version": "1.0.0",
+  "description": "Node.js SDK for nstdata",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "ts-node example.ts"
+  },
+  "keywords": [
+    "scraper",
+    "crawler",
+    "nstdata"
+  ],
+  "author": "nstdata-ai",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^18.0.0",
+    "ts-node": "^10.9.1"
+  }
+}
