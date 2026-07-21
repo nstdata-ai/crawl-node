@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { NstDataClient, Format, ActionBuilder, ProxyType, TaskStatus, TaskType } from './src';
+import { NstDataClient, Format, ActionBuilder, TaskStatus, TaskType } from './src';
 
 // It's recommended to load the token from an environment variable for security
 const TOKEN = process.env.NSTDATA_API_TOKEN;
@@ -92,12 +92,11 @@ async function exampleContentFilter(client: NstDataClient) {
     console.log(await res.data?.getMarkdown());
 }
 
-// Scenario 7: Specify proxy type and exit country
-async function exampleProxyAndCountry(client: NstDataClient) {
+// Scenario 7: Specify proxy exit country
+async function exampleCountry(client: NstDataClient) {
     const res = await client.submitScrapeTaskSync({
         url: "https://example.com/",
         formats: [Format.MARKDOWN],
-        proxy: ProxyType.DATACENTER,
         country: "us",
         timeout: 60000,
     });
@@ -151,7 +150,6 @@ async function exampleCrawl(client: NstDataClient) {
         ignoreQuery: true,
         formats: [Format.MARKDOWN],
         onlyMainContent: true,
-        proxy: ProxyType.RESIDENTIAL,
         timeout: 60000,
     });
     console.log("crawl task id:", submitted.id);
@@ -194,7 +192,7 @@ async function main() {
     // await exampleBrowserActions(client);
     // await exampleCookiesAndHeaders(client);
     // await exampleContentFilter(client);
-    // await exampleProxyAndCountry(client);
+    // await exampleCountry(client);
     // await exampleAsyncPolling(client);
     // await exampleLinksAndRawData(client);
     // await exampleCrawl(client);

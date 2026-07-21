@@ -8,12 +8,6 @@ export enum Format {
     RAW_DATA = 'rawData'
 }
 
-// Proxy types for ScrapeRequestDto.proxy (defaults to residential when unset)
-export enum ProxyType {
-    RESIDENTIAL = 'residential',
-    DATACENTER = 'datacenter'
-}
-
 export enum TaskType {
     SCRAPE = 'scrape',
     CRAWL = 'crawl'
@@ -143,7 +137,6 @@ export interface ScrapeRequestDto {
     jsRender?: JsRenderDto;            // JavaScript rendering instructions
     mobile?: boolean;                  // Whether to emulate a mobile device
     onlyMainContent?: boolean;         // Automatically extract main article content and remove noise
-    proxy?: string;                    // Proxy type (e.g., 'datacenter', 'residential')
     removeSelectors?: string[];        // CSS selectors for elements to remove (e.g., ['.ads', '#popup'])
     targetSelector?: string;           // CSS selector to restrict extraction to a specific element
     timeout?: number;                  // Request timeout in milliseconds
@@ -169,7 +162,6 @@ export interface CrawlRequestDto {
     maxPages?: number;                 // Maximum number of pages to crawl
     mobile?: boolean;                  // Whether to emulate a mobile device
     onlyMainContent?: boolean;         // Automatically extract main article content
-    proxy?: string;                    // Proxy type
     removeSelectors?: string[];        // CSS selectors for elements to remove
     targetSelector?: string;           // CSS selector to restrict extraction
     timeout?: number;                  // Request timeout in milliseconds
@@ -326,5 +318,4 @@ export interface ListCrawlPagesOptions {
     /** Page size (server default 20, max 100). */
     limit?: number;
 }
-
 
