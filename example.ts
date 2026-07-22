@@ -97,7 +97,7 @@ async function exampleCountry(client: NstDataClient) {
     const res = await client.submitScrapeTaskSync({
         url: "https://example.com/",
         formats: [Format.MARKDOWN],
-        country: "us",
+        proxy: { country: "us" },
         timeout: 60000,
     });
     console.log(await res.data?.getMarkdown());

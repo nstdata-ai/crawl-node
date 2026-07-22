@@ -10,7 +10,7 @@ import {
 } from './models';
 
 // Built-in API endpoint.
-const BASE_URL = 'https://test-api.nstproxy.com';
+const BASE_URL = 'https://api.nstproxy.com';
 
 export class NstDataClient {
     private token: string;
@@ -30,8 +30,8 @@ export class NstDataClient {
         return headers;
     }
 
-    // Unwraps the {code, err, msg, data} envelope; passes through responses
-    // that don't use it.
+    // Unwraps the historical {code, err, msg, data} envelope. OpenAPI
+    // schemas describe the inner data payload.
     private async request<T>(method: string, endpoint: string, body?: unknown): Promise<T> {
         const res = await fetch(`${this.baseUrl}${endpoint}`, {
             method,
@@ -45,13 +45,13 @@ export class NstDataClient {
         }
 
         const payload = await res.json();
-        if (payload && typeof payload === 'object' && 'err' in payload && 'code' in payload) {
-            if (payload.err || payload.code !== 200) {
-                throw new Error(`API error: code=${payload.code} msg=${payload.msg}`);
-            }
-            return (payload.data ?? {}) as T;
+        if (!payload || typeof payload !== 'object' || !('err' in payload) || !('code' in payload)) {
+            throw new Error('API error: invalid response envelope');
         }
-        return payload as T;
+        if (payload.err || payload.code !== 200) {
+            throw new Error(`API error: code=${payload.code} msg=${payload.msg}`);
+        }
+        return (payload.data ?? {}) as T;
     }
 
 
@@ -63,7 +63,7 @@ export class NstDataClient {
         if (!req.formats || req.formats.length === 0) {
             throw new Error("formats must contain at least one format");
         }
-        return this.request('POST', '/api/v1/crawl/scrape/submit', req);
+        return this.request('POST', '/api/v1/crawl/scrape?async=true', req);
     }
 
     async submitScrapeTaskSync(req: ScrapeRequestDto): Promise<TaskResultResponseDto> {
@@ -73,7 +73,7 @@ export class NstDataClient {
         if (!req.formats || req.formats.length === 0) {
             throw new Error("formats must contain at least one format");
         }
-        const res = await this.request<TaskResultResponseDto>('POST', '/api/v1/crawl/scrape/submit-sync', req);
+        const res = await this.request<TaskResultResponseDto>('POST', '/api/v1/crawl/scrape', req);
         if (res.data) {
             res.data = new ScrapeDataDto(res.data, (ref) => this.readStorage(ref));
         }
@@ -81,7 +81,7 @@ export class NstDataClient {
     }
 
     async getScrapeTaskResult(taskId: string): Promise<TaskResultResponseDto> {
-        const res = await this.request<TaskResultResponseDto>('GET', `/api/v1/crawl/scrape/result/${encodeURIComponent(taskId)}`);
+        const res = await this.request<TaskResultResponseDto>('GET', `/api/v1/crawl/scrape/${encodeURIComponent(taskId)}`);
         if (res.data) {
             res.data = new ScrapeDataDto(res.data, (ref) => this.readStorage(ref));
         }
@@ -95,11 +95,11 @@ export class NstDataClient {
         if (!req.formats || req.formats.length === 0) {
             throw new Error("formats must contain at least one format");
         }
-        return this.request('POST', '/api/v1/crawl/submit', req);
+        return this.request('POST', '/api/v1/crawl', req);
     }
 
     async getCrawlStatus(crawlId: string): Promise<CrawlStatusResponseDto> {
-        return this.request('GET', `/api/v1/crawl/status/${encodeURIComponent(crawlId)}`);
+        return this.request('GET', `/api/v1/crawl/${encodeURIComponent(crawlId)}`);
     }
 
     async listCrawlPages(crawlId: string, opts: ListCrawlPagesOptions = {}): Promise<CrawlPageListResponseDto> {
@@ -109,7 +109,7 @@ export class NstDataClient {
         if (opts.limit !== undefined && opts.limit > 0) query.set('limit', String(opts.limit));
 
         const qs = query.toString();
-        const endpoint = `/api/v1/crawl/pages/${encodeURIComponent(crawlId)}${qs ? `?${qs}` : ''}`;
+        const endpoint = `/api/v1/crawl/${encodeURIComponent(crawlId)}/pages${qs ? `?${qs}` : ''}`;
         const res = await this.request<CrawlPageListResponseDto>('GET', endpoint);
         if (res.data) {
             for (const item of res.data) {

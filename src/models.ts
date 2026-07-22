@@ -126,10 +126,14 @@ export interface CookieDto {
     value?: string;    // Value of the cookie
 }
 
+export interface ProxyDto {
+    country?: string;                  // Proxy exit country code (e.g., 'us', 'gb')
+}
+
 export interface ScrapeRequestDto {
     url: string;                       // The URL to scrape
     cookies?: CookieDto[];             // Optional cookies to include in the request
-    country?: string;                  // Country code for proxy location (e.g., 'us', 'gb')
+    proxy?: ProxyDto;                  // Proxy settings, such as exit country
     excludeTags?: string[];            // HTML tags to remove entirely (e.g., ['nav', 'footer'])
     formats?: string[];                // Desired output formats (e.g., ['markdown', 'html', 'links'])
     headers?: Record<string, string>;  // Custom HTTP headers
@@ -149,7 +153,7 @@ export interface ScrapeRequestDto {
 export interface CrawlRequestDto {
     url: string;                       // The starting URL to crawl
     cookies?: CookieDto[];             // Optional cookies to include in the request
-    country?: string;                  // Country code for proxy location
+    proxy?: ProxyDto;                  // Proxy settings, such as exit country
     excludeTags?: string[];            // HTML tags to remove entirely
     excludeUrls?: string[];            // Regex patterns to exclude specific URLs from crawling
     formats?: string[];                // Desired output formats (e.g., ['markdown', 'html'])
@@ -318,4 +322,3 @@ export interface ListCrawlPagesOptions {
     /** Page size (server default 20, max 100). */
     limit?: number;
 }
-
