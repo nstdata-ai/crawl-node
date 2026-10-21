@@ -1,201 +1,100 @@
-import * as fs from 'fs';
-import { NstDataClient, Format, ActionBuilder, TaskStatus, TaskType } from './src';
+import { setTimeout as delay } from 'node:timers/promises';
+import { NstDataClient, Format, TaskStatus, TaskResultResponseDto, ScrapeDataDto } from './src';
 
-// It's recommended to load the token from an environment variable for security
-const TOKEN = process.env.NSTDATA_API_TOKEN;
+function resultData(res: TaskResultResponseDto): ScrapeDataDto {
+    if (res.success === false || res.status === TaskStatus.FAILED || res.status === TaskStatus.EXPIRED) {
+        throw new Error('Scrape task failed');
+    }
+    if (res.status !== TaskStatus.COMPLETED || !res.data) throw new Error('No completed scrape data returned');
+    return res.data;
+}
 
-// Scenario 1: Basic scrape, synchronously return markdown and html
 async function exampleBasicScrape(client: NstDataClient) {
     const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.MARKDOWN, Format.HTML],
-        timeout: 60000,
-    });
-    console.log(await res.data?.getMarkdown());
+        url: 'https://example.com/', formats: [Format.MARKDOWN], onlyMainContent: true, timeout: 60000,
+    }, { maxResponseBytes: 1048576 });
+    const markdown = await resultData(res).getMarkdown();
+    if (markdown === undefined) throw new Error('No Markdown content returned');
+    console.log(markdown);
 }
 
-// Scenario 2: Full page screenshot
-async function exampleScreenshot(client: NstDataClient) {
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.SCREENSHOT],
-        jsRender: {
-            waitFor: 3000,
-            actions: [ActionBuilder.screenshot(true)],
-        },
-        timeout: 60000,
-    });
-    console.log(await res.data?.getScreenshot());
-}
-
-// Scenario 3: Export page to PDF
-async function examplePdf(client: NstDataClient) {
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.PDF],
-        timeout: 60000,
-    });
-    console.log(await res.data?.getPdf());
-}
-
-// Scenario 4: Browser action orchestration
-async function exampleBrowserActions(client: NstDataClient) {
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.MARKDOWN],
-        jsRender: {
-            waitForSelector: "body",
-            actions: [
-                ActionBuilder.waitSelector("h1", 5000),
-                ActionBuilder.fill("#search-input", "hello"),
-                ActionBuilder.click("#search-button"),
-                ActionBuilder.wait(1000),
-                ActionBuilder.scrollY(800),
-                ActionBuilder.executeJs("window.scrollTo(0, document.body.scrollHeight)"),
-                ActionBuilder.waitForRequest("*example.com/api/*", 10000),
-            ],
-        },
-        timeout: 60000,
-    });
-    console.log(await res.data?.getMarkdown());
-}
-
-// Scenario 5: Bring Cookies, custom headers, simulate mobile device
-async function exampleCookiesAndHeaders(client: NstDataClient) {
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.HTML],
-        cookies: [
-            { name: "session_id", value: "abc123", domain: "example.com", path: "/", secure: true },
-        ],
-        headers: {
-            "Referer": "https://example.com/home",
-        },
-        mobile: true,
-        timeout: 60000,
-    });
-    console.log(await res.data?.getHtml());
-}
-
-// Scenario 6: Main content extraction and filtering
-async function exampleContentFilter(client: NstDataClient) {
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.MARKDOWN],
-        onlyMainContent: true,
-        includeTags: ["main", "article"],
-        excludeTags: ["nav", "footer"],
-        targetSelector: "main article",
-        removeSelectors: [".ads", "#popup"],
-        timeout: 60000,
-    });
-    console.log(await res.data?.getMarkdown());
-}
-
-// Scenario 7: Specify proxy exit country
-async function exampleCountry(client: NstDataClient) {
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.MARKDOWN],
-        proxy: { country: "us" },
-        timeout: 60000,
-    });
-    console.log(await res.data?.getMarkdown());
-}
-
-// Scenario 8: Asynchronous submission + polling results
-async function exampleAsyncPolling(client: NstDataClient) {
+export async function exampleAsyncPolling(client: NstDataClient, signal = AbortSignal.timeout(120000)) {
+    signal.throwIfAborted();
+    const options = { signal, maxResponseBytes: 1048576 };
     const submitted = await client.submitScrapeTask({
-        url: "https://example.com/",
-        formats: [Format.MARKDOWN],
-        timeout: 60000,
-    });
-    console.log("task id:", submitted.id);
-
-    while (true) {
-        const res = await client.getScrapeTaskResult(submitted.id!);
+        url: 'https://example.com/', formats: [Format.MARKDOWN], timeout: 60000,
+    }, options);
+    if (!submitted.id) throw new Error('Submission returned no task ID');
+    // Retain this ID if local waiting stops; do not submit the task again.
+    console.log('task id:', submitted.id);
+    for (let poll = 0; poll < 20; poll++) {
+        signal.throwIfAborted();
+        const res = await client.getScrapeTaskResult(submitted.id, options);
+        if (res.success === false || res.status === TaskStatus.FAILED || res.status === TaskStatus.EXPIRED) {
+            throw new Error('Scrape task failed');
+        }
         if (res.status === TaskStatus.COMPLETED) {
-            console.log(await res.data?.getMarkdown());
+            const markdown = await resultData(res).getMarkdown();
+            if (markdown === undefined) throw new Error('No Markdown content returned');
+            console.log(markdown);
             return;
         }
-        if (res.status === TaskStatus.FAILED) {
-            throw new Error(`task failed: ${res.errorCode} ${res.errorMessage}`);
-        }
-        await new Promise(r => setTimeout(r, 3000));
+        if (res.status !== TaskStatus.PROCESSING && res.status !== TaskStatus.SCRAPING) throw new Error('Unexpected scrape status');
+        if (poll < 19) await delay(3000, undefined, { signal });
     }
+    throw new Error('Scrape polling limit reached; retain the existing task ID');
 }
 
-
-// Scenario 11: Extract links and raw data
-async function exampleLinksAndRawData(client: NstDataClient) {
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
-        formats: [Format.LINKS, Format.RAW_DATA],
-        timeout: 60000,
-    });
-    for (const link of (res.data?.links || [])) {
-        console.log(link);
-    }
-    console.log("rawData length:", (await res.data?.getRawData())?.length || 0);
-}
-
-// Scenario 12: Submit batch crawl tasks
-async function exampleCrawl(client: NstDataClient) {
+export async function exampleCrawl(client: NstDataClient, signal = AbortSignal.timeout(120000)) {
+    signal.throwIfAborted();
+    const options = { signal, maxResponseBytes: 1048576 };
     const submitted = await client.submitCrawlTask({
-        url: "https://example.com/",
-        maxDepth: 3,
-        maxPages: 10,
-        includeUrls: ["*example.com/blog/*", "*/docs/*"],
-        excludeUrls: ["*example.com/admin/*"],
-        ignoreQuery: true,
-        formats: [Format.MARKDOWN],
-        onlyMainContent: true,
-        timeout: 60000,
-    });
-    console.log("crawl task id:", submitted.id);
-
-    while (true) {
-        const st = await client.getCrawlStatus(submitted.id!);
-        console.log(`status=${st.status} total=${st.total} completed=${st.completed} failed=${st.failed} pending=${st.pending}`);
-        if (st.status === TaskStatus.COMPLETED || st.status === TaskStatus.FAILED) break;
-        await new Promise(r => setTimeout(r, 3000));
-    }
-
-    let cursor: string | undefined = undefined;
-    while (true) {
-        const pages = await client.listCrawlPages(submitted.id!, { afterCursor: cursor, limit: 20 });
-        for (const page of (pages.data || [])) {
-            console.log("==", page.url, page.status);
-            if (page.success && page.data) {
-                let md = await page.data.getMarkdown();
-                console.log(md);
-            } else if (page.errorMessage) {
-                console.log("error:", page.errorCode, page.errorMessage);
-            }
+        url: 'https://example.com/', maxDepth: 1, maxPages: 10,
+        formats: [Format.MARKDOWN], onlyMainContent: true, timeout: 60000,
+    }, options);
+    if (!submitted.id) throw new Error('Submission returned no crawl ID');
+    console.log('crawl task id:', submitted.id);
+    for (let poll = 0; ; poll++) {
+        signal.throwIfAborted();
+        const status = await client.getCrawlStatus(submitted.id, options);
+        if (status.status === TaskStatus.FAILED || status.status === TaskStatus.EXPIRED) throw new Error(`Crawl task ${status.status}`);
+        if (status.status === TaskStatus.COMPLETED) {
+            if (status.failed && status.failed > 0) throw new Error('Crawl contains failed pages');
+            break;
         }
-        if (!pages.nextCursor) break;
+        if (status.status !== TaskStatus.PROCESSING && status.status !== TaskStatus.SCRAPING) throw new Error('Unexpected crawl status');
+        if (poll === 19) throw new Error('Crawl polling limit reached; retain the existing crawl ID');
+        await delay(3000, undefined, { signal });
+    }
+    let cursor: string | undefined;
+    const cursors = new Set<string>();
+    for (let batch = 0; batch < 100; batch++) {
+        signal.throwIfAborted();
+        const pages = await client.listCrawlPages(submitted.id, { afterCursor: cursor, limit: 20 }, options);
+        for (const page of pages.data ?? []) {
+            if (page.success === false || page.status === TaskStatus.FAILED || page.status === TaskStatus.EXPIRED) throw new Error('Crawl page failed');
+            const markdown = await page.data?.getMarkdown();
+            if (markdown === undefined) throw new Error('No Markdown content returned for crawl page');
+            console.log(page.url, markdown);
+        }
+        if (!pages.nextCursor) return;
+        if (cursors.has(pages.nextCursor)) throw new Error('Repeated pagination cursor');
+        cursors.add(pages.nextCursor);
         cursor = pages.nextCursor;
     }
+    throw new Error('Crawl pagination limit reached; retain the existing crawl ID and cursor');
 }
 
 async function main() {
-    if (TOKEN === "YOUR_API_TOKEN") {
-        console.log("Please set your API token by modifying TOKEN or setting NSTDATA_API_TOKEN env var");
-        return;
-    }
-
-    const client = new NstDataClient(TOKEN);
-    // Uncomment the scenario you want to run
-    await exampleBasicScrape(client);
-    // await exampleScreenshot(client);
-    // await examplePdf(client);
-    // await exampleBrowserActions(client);
-    // await exampleCookiesAndHeaders(client);
-    // await exampleContentFilter(client);
-    // await exampleCountry(client);
-    // await exampleAsyncPolling(client);
-    // await exampleLinksAndRawData(client);
-    // await exampleCrawl(client);
+    const token = process.env.NSTDATA_API_TOKEN;
+    if (!token?.trim()) throw new Error('Set NSTDATA_API_TOKEN locally');
+    await exampleBasicScrape(new NstDataClient(token));
+    // Run exampleAsyncPolling or exampleCrawl explicitly when needed; each creates a task.
 }
 
-main().catch(console.error);
+if (require.main === module) {
+    main().catch(() => {
+        console.error('Example failed; check local configuration and preserve any existing task ID.');
+        process.exitCode = 1;
+    });
+}

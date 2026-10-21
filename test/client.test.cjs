@@ -1,0 +1,404 @@
+const { test, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const { NstDataClient, NstDataApiError, ScrapeDataDto } = require('../dist');
+const fixtures = require('./fixtures/tasks.json');
+const { getEventListeners } = require('node:events');
+
+const originalFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = originalFetch; });
+const envelope = (data) => Response.json({ code: 200, err: false, data });
+
+test('rejects missing tokens before a request', () => {
+    for (const token of [undefined, null, '', '   ']) {
+        assert.throws(() => new NstDataClient(token), /token/i);
+    }
+});
+
+test('uses configured baseURL for API and deferred storage reads', async () => {
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+        calls.push({ url, init });
+        return calls.length === 1
+            ? envelope({ status: 'completed', success: true, data: { markdownRef: 'ref /&' } })
+            : new Response('# Stored');
+    };
+    const client = new NstDataClient('test-token', { baseURL: 'https://test.invalid/' });
+    const result = await client.submitScrapeTaskSync({ url: 'https://example.com', formats: ['markdown'] });
+    assert.equal(await result.data.getMarkdown(), '# Stored');
+    assert.equal(calls[0].url, 'https://test.invalid/api/v1/crawl/scrape');
+    assert.equal(calls[1].url, 'https://test.invalid/api/v1/crawl/storage/read?st=ref%20%2F%26');
+    assert.equal(calls[0].init.headers['x-api-key'], 'test-token');
+    assert.deepEqual(JSON.parse(calls[0].init.body), { url: 'https://example.com', formats: ['markdown'] });
+    assert.equal(calls[1].init.headers['Content-Type'], undefined);
+});
+
+test('preserves empty inline and stored text without fetching again', async () => {
+    let reads = 0;
+    const reader = async () => { reads++; return new ArrayBuffer(0); };
+    const inline = new ScrapeDataDto({ html: '', markdown: '', htmlRef: 'h', markdownRef: 'm' }, reader);
+    assert.equal(await inline.getHtml(), '');
+    assert.equal(await inline.getMarkdown(), '');
+    assert.equal(reads, 0);
+    const stored = new ScrapeDataDto({ htmlRef: 'h', markdownRef: 'm' }, reader);
+    for (let i = 0; i < 2; i++) {
+        assert.equal(await stored.getHtml(), '');
+        assert.equal(await stored.getMarkdown(), '');
+    }
+    assert.equal(reads, 2);
+    const nullable = new ScrapeDataDto({ html: null, htmlRef: 'h' }, reader);
+    assert.equal(await nullable.getHtml(), '');
+    assert.equal(reads, 3);
+});
+
+test('an already cancelled call makes no request', async () => {
+    globalThis.fetch = async () => { assert.fail('must not send'); };
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(new NstDataClient('test-token').getCrawlStatus('id', { signal: controller.signal }), { name: 'AbortError' });
+});
+
+test('validates transport configuration', () => {
+    for (const timeoutMs of [0, -1, NaN, Infinity, 1.5, 2147483648]) {
+        assert.throws(() => new NstDataClient('test-token', { timeoutMs }), /timeoutMs/);
+    }
+    for (const baseURL of ['not a url', 'file:///tmp/test', 'https://user:pass@test.invalid', 'https://test.invalid?x=1', 'https://test.invalid#x']) {
+        assert.throws(() => new NstDataClient('test-token', { baseURL }));
+    }
+});
+
+test('encodes IDs and separates transport options from documented request DTOs', async () => {
+    const calls = [];
+    globalThis.fetch = async (url, init) => { calls.push([url, init]); return envelope({}); };
+    const client = new NstDataClient('test-token');
+    const req = { url: 'https://example.com', formats: ['markdown'], timeout: 60000 };
+    const options = { timeoutMs: 1000, signal: new AbortController().signal };
+    await client.submitScrapeTask(req, options);
+    await client.submitScrapeTaskSync(req, options);
+    await client.getScrapeTaskResult('id /?', options);
+    await client.submitCrawlTask({ ...req, maxPages: 2 }, options);
+    await client.getCrawlStatus('id /?', options);
+    await client.listCrawlPages('id /?', { afterCursor: 'next /&', limit: 2 }, options);
+    assert.deepEqual(calls.map(([url]) => url.replace('https://api.nstdata.io', '')), [
+        '/api/v1/crawl/scrape?async=true', '/api/v1/crawl/scrape', '/api/v1/crawl/scrape/id%20%2F%3F',
+        '/api/v1/crawl', '/api/v1/crawl/id%20%2F%3F',
+        '/api/v1/crawl/id%20%2F%3F/pages?after_cursor=next+%2F%26&limit=2',
+    ]);
+    assert.deepEqual(calls.map(([, init]) => init.method), ['POST', 'POST', 'GET', 'POST', 'GET', 'GET']);
+    assert.deepEqual(JSON.parse(calls[0][1].body), req);
+    assert.equal(calls[2][1].body, undefined);
+    assert.equal(calls[2][1].headers['Content-Type'], undefined);
+    assert.equal(getEventListeners(options.signal, 'abort').length, 0);
+});
+
+test('preserves processing, failed and successful task results', async () => {
+    const client = new NstDataClient('test-token');
+    for (const name of ['processing', 'failed', 'completed']) {
+        globalThis.fetch = async () => Response.json(fixtures[name]);
+        const result = await client.getScrapeTaskResult('id');
+        assert.equal(result.status, fixtures[name].data.status);
+        if (name === 'failed') {
+            assert.equal(result.success, false);
+            assert.equal(result.errorCode, 'FIXTURE_FAILURE');
+            assert.equal(result.data, undefined);
+        } else if (name === 'completed') {
+            assert.ok(result.data instanceof ScrapeDataDto);
+            assert.equal(await result.data.getMarkdown(), '# Fixture');
+            assert.equal(await result.data.getHtml(), '');
+            assert.equal(result.data.metadata.title, 'Fixture');
+        }
+    }
+});
+
+test('page cursors and deferred references survive normalization, including an empty last page', async () => {
+    const calls = [];
+    globalThis.fetch = async (url) => {
+        calls.push(url);
+        if (url.includes('storage/read')) return new Response('# Page');
+        return Response.json(url.includes('after_cursor') ? fixtures.lastPage : fixtures.pages);
+    };
+    const client = new NstDataClient('test-token');
+    const first = await client.listCrawlPages('id');
+    assert.equal(first.data[1].data, undefined);
+    assert.equal(await first.data[0].data.getMarkdown(), '# Page');
+    const last = await client.listCrawlPages('id', { afterCursor: first.nextCursor, limit: 2 });
+    assert.deepEqual(last.data, []);
+    assert.equal(last.nextCursor, undefined);
+    assert.equal(calls.length, 3);
+    assert.match(calls[2], /after_cursor=next\+%2F%26&limit=2$/);
+});
+
+test('rejects invalid API payload containers without exposing their contents', async () => {
+    for (const data of [undefined, null, false, 42, 'private-response', [], [{ private: 'response' }]]) {
+        let calls = 0;
+        const client = new NstDataClient('test-token', { fetch: async () => {
+            calls++;
+            return envelope(data);
+        } });
+        await assert.rejects(client.submitCrawlTask({ url: 'https://example.com', formats: ['markdown'] }), error => {
+            assert.ok(error instanceof NstDataApiError);
+            assert.equal(error.statusCode, 200);
+            assert.match(error.message, /invalid response payload/);
+            assert.doesNotMatch(error.message, /private-response/);
+            return true;
+        });
+        assert.equal(calls, 1);
+    }
+});
+
+test('rejects malformed page collections before returning partial results', async () => {
+    for (const data of ['private-response', {}, [null], [false], [42], ['private-response'], [[]], [{ data: 'private-response' }]]) {
+        const client = new NstDataClient('test-token', {
+            fetch: async () => envelope({ total: 1, data }),
+        });
+        await assert.rejects(client.listCrawlPages('crawl'), error => {
+            assert.ok(error instanceof NstDataApiError);
+            assert.match(error.message, /invalid page results/);
+            assert.doesNotMatch(error.message, /private-response/);
+            return true;
+        });
+    }
+});
+
+test('rejects malformed single-page content without hiding task failures', async () => {
+    for (const data of [false, 42, 'private-response', []]) {
+        const client = new NstDataClient('test-token', {
+            fetch: async () => envelope({ success: true, status: 'completed', data }),
+        });
+        await assert.rejects(client.submitScrapeTaskSync({ url: 'https://example.com', formats: ['markdown'] }), NstDataApiError);
+        await assert.rejects(client.getScrapeTaskResult('task'), NstDataApiError);
+    }
+    const client = new NstDataClient('test-token', {
+        fetch: async () => envelope({ success: false, status: 'failed', data: null, errorCode: 'TASK_FAILED' }),
+    });
+    const result = await client.getScrapeTaskResult('task');
+    assert.equal(result.success, false);
+    assert.equal(result.errorCode, 'TASK_FAILED');
+    assert.equal(result.data, null);
+});
+
+test('accepts empty page results and additional response fields', async () => {
+    for (const data of [undefined, null, []]) {
+        const client = new NstDataClient('test-token', { fetch: async () => envelope({ data, futureField: true }) });
+        const result = await client.listCrawlPages('crawl');
+        assert.deepEqual(result.data, data);
+        assert.equal(result.futureField, true);
+    }
+    const client = new NstDataClient('test-token', { fetch: async () => envelope({
+        data: [{ success: false, data: null, errorCode: 'TASK_FAILED' }, { data: { markdown: '', futureField: true } }],
+        nextCursor: 'next',
+    }) });
+    const result = await client.listCrawlPages('crawl');
+    assert.equal(result.data[0].errorCode, 'TASK_FAILED');
+    assert.equal(result.data[0].data, null);
+    assert.equal(await result.data[1].data.getMarkdown(), '');
+    assert.equal(result.nextCursor, 'next');
+});
+
+test('binary references use the reader and cache zero-length downloads', async () => {
+    for (const [ref, getter] of [['pdfRef', 'getPdf'], ['rawDataRef', 'getRawData'], ['screenshotRef', 'getScreenshot']]) {
+        let reads = 0;
+        const data = new ScrapeDataDto({ [ref]: 'fixture-ref' }, async () => { reads++; return new ArrayBuffer(0); });
+        assert.deepEqual(await data[getter](), Buffer.alloc(0));
+        assert.deepEqual(await data[getter](), Buffer.alloc(0));
+        assert.equal(reads, 1);
+    }
+});
+
+test('inline binary and raw content survive sync, result and crawl page responses', async () => {
+    for (const operation of ['sync', 'result', 'pages']) {
+        let requests = 0;
+        const client = new NstDataClient('test-token', { fetch: async () => {
+            assert.equal(++requests, 1, 'inline getters must not download references');
+            const data = {
+                pdf: 'JVBERi0xLjQK', screenshot: 'AP+A', rawData: '<p>雪</p>',
+                ...(operation === 'result' ? {
+                    pdfRef: 'pdf-ref', screenshotRef: 'image-ref', rawDataRef: 'raw-ref',
+                } : {}),
+            };
+            return envelope(operation === 'pages' ? { data: [{ data }] } : { success: true, data });
+        } });
+        const result = operation === 'sync'
+            ? await client.submitScrapeTaskSync({ url: 'https://example.com', formats: ['pdf', 'screenshot', 'rawData'] })
+            : operation === 'result' ? await client.getScrapeTaskResult('task') : await client.listCrawlPages('crawl');
+        const data = operation === 'pages' ? result.data[0].data : result.data;
+        for (let i = 0; i < 2; i++) {
+            assert.deepEqual(await data.getPdf(), Buffer.from([37, 80, 68, 70, 45, 49, 46, 52, 10]));
+            assert.deepEqual(await data.getScreenshot(), Buffer.from([0, 255, 128]));
+            assert.deepEqual(await data.getRawData(), Buffer.from([60, 112, 62, 233, 155, 170, 60, 47, 112, 62]));
+        }
+        assert.equal(requests, 1);
+    }
+});
+
+test('preserves task identity and explicit truncation on sync, result and crawl pages', async () => {
+    for (const truncated of [true, false, undefined, null]) {
+        const payload = { id: 'known-task', success: true, data: { markdown: '# Fixture', truncated } };
+        const client = new NstDataClient('test-token', { fetch: async url => envelope(
+            url.endsWith('/pages') ? { data: [{ ...payload, taskId: 'known-page' }] } : payload,
+        ) });
+        const sync = await client.submitScrapeTaskSync({ url: 'https://example.com', formats: ['markdown'] });
+        const result = await client.getScrapeTaskResult('known-task');
+        const pages = await client.listCrawlPages('crawl');
+        assert.equal(sync.id, 'known-task');
+        assert.equal(result.id, 'known-task');
+        assert.equal(pages.data[0].taskId, 'known-page');
+        for (const data of [sync.data, result.data, pages.data[0].data]) {
+            assert.equal(data.truncated, truncated === null ? undefined : truncated);
+            assert.equal(await data.getMarkdown(), '# Fixture');
+        }
+    }
+});
+
+test('distinguishes empty inline bytes from absent content and reference fallback', async () => {
+    for (const [field, getter] of [['pdf', 'getPdf'], ['screenshot', 'getScreenshot'], ['rawData', 'getRawData']]) {
+        for (const value of ['', null, undefined]) {
+            let downloads = 0;
+            const client = new NstDataClient('test-token', { fetch: async url => {
+                if (url.includes('/storage/read?')) {
+                    downloads++;
+                    return new Response(new Uint8Array([0, 255, 128]));
+                }
+                return envelope({ data: { [field]: value, [field + 'Ref']: 'stored-ref' } });
+            } });
+            const result = await client.getScrapeTaskResult('task');
+            const expected = value === '' ? Buffer.alloc(0) : Buffer.from([0, 255, 128]);
+            assert.deepEqual(await result.data[getter](), expected);
+            assert.deepEqual(await result.data[getter](), expected);
+            assert.equal(downloads, value === '' ? 0 : 1);
+            const missing = new NstDataClient('test-token', { fetch: async () => envelope({ data: { [field]: value } }) });
+            const absent = await missing.getScrapeTaskResult('task');
+            assert.deepEqual(await absent.data[getter](), value === '' ? Buffer.alloc(0) : undefined);
+        }
+    }
+});
+
+test('decodes padded, unpadded and large inline Base64 without treating raw text as Base64', async () => {
+    for (const [screenshot, expected] of [
+        ['AQ==', Buffer.from([1])], ['AQ', Buffer.from([1])],
+        ['AQI=', Buffer.from([1, 2])], ['AQI', Buffer.from([1, 2])],
+        ['AP+A'.repeat(65536), Buffer.alloc(196608, Buffer.from([0, 255, 128]))],
+    ]) {
+        const client = new NstDataClient('test-token', { fetch: async () => envelope({ data: { screenshot, rawData: 'AQID' } }) });
+        const result = await client.getScrapeTaskResult('task');
+        assert.deepEqual(await result.data.getScreenshot(), expected);
+        assert.deepEqual(await result.data.getRawData(), Buffer.from([65, 81, 73, 68]));
+    }
+});
+
+test('rejects malformed inline content and truncation without exposing it or retrying', async () => {
+    const invalid = [
+        ...['pdf', 'screenshot'].flatMap(field => [
+            42, false, {}, [], 'private-response!', 'A', 'AQ=I', 'AQ===', 'AQ=', 'AAAA==',
+        ].map(value => ({ [field]: value }))),
+        ...[42, false, {}, []].map(rawData => ({ rawData })),
+        ...['true', 1, {}, []].map(truncated => ({ truncated })),
+    ];
+    for (const data of invalid) {
+        for (const operation of ['sync', 'result', 'pages']) {
+            let requests = 0;
+            const client = new NstDataClient('test-token', { fetch: async () => {
+                requests++;
+                return envelope(operation === 'pages' ? { data: [{ data }] } : { success: true, data });
+            } });
+            const pending = operation === 'sync'
+                ? client.submitScrapeTaskSync({ url: 'https://example.com', formats: ['pdf'] })
+                : operation === 'result' ? client.getScrapeTaskResult('task') : client.listCrawlPages('crawl');
+            await assert.rejects(pending, error => {
+                assert.ok(error instanceof NstDataApiError);
+                assert.match(error.message, /invalid task content/);
+                assert.doesNotMatch(error.message, /private-response/);
+                return true;
+            });
+            assert.equal(requests, 1);
+        }
+    }
+});
+
+test('HTTP, envelope and JSON failures propagate without retrying a task creation', async () => {
+    for (const [response, pattern] of [
+        [() => new Response('unavailable', { status: 503 }), /status=503/],
+        [() => Response.json({ code: 403, err: true, msg: 'denied' }), /code=403/],
+        [() => Response.json({ wrong: true }), /invalid response envelope/],
+        [() => new Response('invalid JSON'), /JSON/],
+    ]) {
+        let calls = 0;
+        globalThis.fetch = async () => { calls++; return response(); };
+        await assert.rejects(new NstDataClient('test-token').submitScrapeTask({ url: 'https://example.com', formats: ['markdown'] }), pattern);
+        assert.equal(calls, 1);
+    }
+});
+
+test('API body transport failures retain their identity with and without a byte cap', async () => {
+    for (const maxResponseBytes of [undefined, 1024]) {
+        for (const operation of ['submit', 'status']) {
+            const failure = new TypeError('synthetic body connection interrupted');
+            let calls = 0, chunks = 0;
+            globalThis.fetch = async () => {
+                calls++;
+                return new Response(new ReadableStream({
+                    pull(controller) {
+                        if (chunks++ === 0) controller.enqueue(new TextEncoder().encode('{"code":'));
+                        else controller.error(failure);
+                    },
+                }));
+            };
+            const signal = new AbortController().signal;
+            const options = { maxResponseBytes, signal };
+            const client = new NstDataClient('test-token');
+            const request = operation === 'submit'
+                ? client.submitScrapeTask({ url: 'https://example.com', formats: ['markdown'] }, options)
+                : client.getCrawlStatus('existing', options);
+            await assert.rejects(request, error => error === failure);
+            assert.equal(calls, 1);
+            assert.equal(getEventListeners(signal, 'abort').length, 0);
+        }
+    }
+});
+
+test('storage HTTP errors are distinct from task failures', async () => {
+    globalThis.fetch = async () => new Response('', { status: 404 });
+    await assert.rejects(new NstDataClient('test-token').readStorage('missing'), /readStorage error: status=404/);
+});
+
+test('deferred reads inherit the originating cancellation signal', async () => {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return envelope({ data: { markdownRef: 'ref' } }); };
+    const controller = new AbortController();
+    const result = await new NstDataClient('test-token').getScrapeTaskResult('id', { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(result.data.getMarkdown(), { name: 'AbortError' });
+    assert.equal(calls, 1);
+});
+
+test('rejects malformed text, reference, link and metadata fields across every task result path', async () => {
+    const secret = 'private-response-value';
+    const malformed = [
+        ...['html', 'markdown', 'htmlRef', 'markdownRef', 'pdfRef', 'rawDataRef', 'screenshotRef'].map(field => ({ [field]: { secret } })),
+        { links: secret }, { links: [secret, 1] }, { metadata: secret }, { metadata: [] },
+        ...['canonical', 'description', 'language', 'ogImage', 'title'].map(field => ({ metadata: { [field]: { secret } } })),
+        { metadata: { statusCode: secret } },
+    ];
+    for (const data of malformed) for (const operation of ['sync', 'query', 'pages']) {
+        let calls = 0;
+        globalThis.fetch = async () => { calls++; return envelope(operation === 'pages' ? { data: [{ data }] } : { status: 'completed', success: true, data }); };
+        const client = new NstDataClient('test-token');
+        const action = operation === 'sync' ? client.submitScrapeTaskSync({ url: 'https://example.com/', formats: ['markdown'] })
+            : operation === 'query' ? client.getScrapeTaskResult('known-id') : client.listCrawlPages('known-id');
+        await assert.rejects(action, error => error instanceof NstDataApiError && !error.message.includes(secret));
+        assert.equal(calls, 1);
+    }
+});
+
+test('normalizes null content fields and preserves empty links, metadata and unfamiliar metadata fields', async () => {
+    globalThis.fetch = async () => envelope({ status: 'completed', success: true, data: {
+        html: null, markdown: null, links: null, metadata: null, htmlRef: null, markdownRef: null,
+        pdfRef: null, rawDataRef: null, screenshotRef: null,
+    } });
+    const client = new NstDataClient('test-token'), absent = (await client.getScrapeTaskResult('known-id')).data;
+    for (const field of ['links', 'metadata', 'htmlRef', 'markdownRef', 'pdfRef', 'rawDataRef', 'screenshotRef']) assert.equal(absent[field], undefined);
+    assert.equal(await absent.getMarkdown(), undefined);
+    globalThis.fetch = async () => envelope({ data: { markdown: '', links: [], metadata: { title: '', statusCode: 200, extra: { preserved: true } } } });
+    const empty = (await client.getScrapeTaskResult('known-id')).data;
+    assert.equal(await empty.getMarkdown(), ''); assert.deepEqual(empty.links, []);
+    assert.deepEqual(empty.metadata, { title: '', statusCode: 200, extra: { preserved: true } });
+});

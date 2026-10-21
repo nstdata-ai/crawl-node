@@ -1,12 +1,31 @@
 {
   "name": "@nstdata-ai/crawl",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "description": "Node.js SDK for nstdata",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "engines": {
+    "node": ">=22.18.0 <23 || >=24.0.0 <25"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README_zh.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nstdata-ai/crawl-node.git"
+  },
   "scripts": {
     "build": "tsc",
-    "test": "ts-node example.ts"
+    "typecheck": "tsc --noEmit && tsc --noEmit --strict --target ES2022 --module CommonJS --esModuleInterop --skipLibCheck example.ts",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "example": "ts-node example.ts",
+    "check:package": "node scripts/check-package.cjs",
+    "prepack": "npm run build"
   },
   "keywords": [
     "scraper",
