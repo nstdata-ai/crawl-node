@@ -73,6 +73,7 @@ export async function exampleCrawl(client: NstDataClient, signal = AbortSignal.t
         const pages = await client.listCrawlPages(submitted.id, { afterCursor: cursor, limit: 20 }, options);
         for (const page of pages.data ?? []) {
             if (page.success === false || page.status === TaskStatus.FAILED || page.status === TaskStatus.EXPIRED) throw new Error('Crawl page failed');
+            if (page.status !== TaskStatus.COMPLETED) throw new Error('No completed crawl page returned');
             const markdown = await page.data?.getMarkdown();
             if (markdown === undefined) throw new Error('No Markdown content returned for crawl page');
             console.log(page.url, markdown);

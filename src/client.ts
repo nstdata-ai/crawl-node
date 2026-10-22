@@ -145,12 +145,13 @@ export class NstDataClient {
             const bytes = await this.readBody(res, options.maxResponseBytes);
             let payload;
             try {
-                payload = JSON.parse(new TextDecoder().decode(bytes));
+                payload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
             } catch {
                 // Parser errors can contain snippets of private response bodies.
                 throw new NstDataApiError('API error: invalid JSON response', { statusCode: res.status });
             }
-            if (!payload || typeof payload !== 'object' || typeof payload.err !== 'boolean' || typeof payload.code !== 'number') {
+            if (!payload || typeof payload !== 'object' || typeof payload.err !== 'boolean'
+                || typeof payload.code !== 'number' || !Number.isFinite(payload.code)) {
                 throw new NstDataApiError('API error: invalid response envelope', { statusCode: res.status });
             }
             if (payload.err || payload.code !== 200) {

@@ -11,9 +11,9 @@
 - Decode inline Base64 PDF/screenshots and UTF-8 raw text through the existing Buffer getters; prefer present inline content, including empty content, over references.
 - Preserve optional content `truncated` and expose the service-provided task `id` in result types. Reject malformed inline binary/raw content and truncation flags without including response values in errors.
 - Expose `NstDataApiError` HTTP/API codes without raw response bodies; preserve timeout and transport error types, including interrupted bodies.
-- Reject malformed API payload containers, task content and page collections with `NstDataApiError`; validate text, reference, link and known metadata types before consumption, preserving unknown metadata fields. Normalize null content references, links and metadata containers as absent.
+- Reject malformed UTF-8 JSON, nonfinite envelope codes, API payload containers, task content and page collections with `NstDataApiError`; validate text, reference, link and known metadata types before consumption, preserving unknown metadata fields. Normalize null content references, links and metadata containers as absent.
 - Require explicit `formats` in submission types, matching runtime validation; declare supported Node.js versions in package metadata.
-- Replace site-specific action/filter demonstrations with three basic workflows and explicit polling/page/response limits; add request/result regressions and installed-package checks.
+- Replace site-specific action/filter demonstrations with three basic workflows and explicit polling/page/response limits; require completed crawl pages before printing content. Add request/result regressions and installed-package checks.
 
 ### Compatibility
 

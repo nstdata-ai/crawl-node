@@ -102,7 +102,7 @@ API 和存储请求拒绝所有重定向，包括同源跳转；请求不自动�
 
 `NstDataApiError` 提供可选 HTTP `statusCode` 和 API 业务码 `code`；任务失败保留在结果字段中。超时、取消和传输错误保留自身类型，正文传输中断不会误报为 JSON 语法错误。
 
-API 数据容器、任务内容容器或页面集合格式错误时，抛出 `NstDataApiError`。不因未知字段拒绝响应；任务失败和缺失内容仍通过结果字段表达。
+无效 UTF-8 JSON、非有限 envelope code、API 数据容器、任务内容容器或页面集合格式错误时，抛出 `NstDataApiError`。不因未知字段拒绝响应；任务失败和缺失内容仍通过结果字段表达。
 
 无效的内联文本、存储引用、链接、metadata、Base64、原始数据和截断标记也抛出 `NstDataApiError`。正文、引用、链接及 metadata 容器为 `null` 时按缺失处理；空文本和空数组仍保留。未知 metadata 字段原样保留。
 

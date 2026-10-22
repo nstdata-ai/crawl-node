@@ -38,6 +38,23 @@ test('a failed crawl does not fetch pages', async () => {
     await assert.rejects(exampleCrawl(client), /Crawl task failed/);
 });
 
+test('crawl example refuses unfinished or unknown page states before reading content', async t => {
+    const printed = [];
+    t.mock.method(console, 'log', (...args) => printed.push(args));
+    for (const status of ['processing', 'scraping', 'unexpected', undefined]) {
+        let reads = 0;
+        const client = {
+            submitCrawlTask: async () => ({ id: 'known-crawl' }),
+            getCrawlStatus: async () => ({ status: 'completed' }),
+            listCrawlPages: async () => ({ data: [{ status, success: true,
+                data: { getMarkdown: async () => { reads++; return 'partial-content'; } } }] }),
+        };
+        await assert.rejects(exampleCrawl(client), /No completed crawl page/);
+        assert.equal(reads, 0);
+    }
+    assert.ok(printed.every(args => !args.includes('partial-content')));
+});
+
 test('expired scrape and crawl tasks stop without polling or reading pages', async () => {
     let scrapePolls = 0;
     const scrape = {

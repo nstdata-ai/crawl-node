@@ -102,7 +102,7 @@ API and storage redirects, including same-origin redirects, are rejected. Reques
 
 `NstDataApiError` exposes optional HTTP `statusCode` and API-envelope `code`. Task failures remain result fields. Timeout, cancellation and transport errors retain their own types; interrupted bodies are not reported as JSON syntax errors.
 
-Malformed API payload containers, task-content containers and page collections throw `NstDataApiError`. Unrecognized fields do not cause rejection; task failures and absent content remain result fields.
+Malformed UTF-8 JSON, nonfinite envelope codes, API payload containers, task-content containers and page collections throw `NstDataApiError`. Unrecognized fields do not cause rejection; task failures and absent content remain result fields.
 
 Malformed inline text, storage references, links, metadata, Base64, raw data and truncation flags also throw `NstDataApiError`. Null content, references, links and metadata containers are treated as absent; empty text/arrays remain present. Unknown metadata fields are preserved.
 

@@ -8,6 +8,41 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 const envelope = (data) => Response.json({ code: 200, err: false, data });
 
+test('rejects malformed UTF-8 JSON without replacing content or exposing the response', async () => {
+    const body = Buffer.concat([
+        Buffer.from('{"code":200,"err":false,"data":{"status":"completed","success":true,"data":{"markdown":"private-'),
+        Buffer.from([0xff]), Buffer.from('"}}}'),
+    ]);
+    const client = new NstDataClient('test-token', { fetch: async () => new Response(body) });
+    await assert.rejects(client.getScrapeTaskResult('known'), error => {
+        assert.ok(error instanceof NstDataApiError);
+        assert.match(error.message, /invalid JSON response/);
+        assert.doesNotMatch(error.message, /private-/);
+        return true;
+    });
+    const text = '中文 — valid replacement character: \uFFFD';
+    const valid = new NstDataClient('test-token', { fetch: async () => envelope({ data: { markdown: text } }) });
+    assert.equal(await (await valid.getScrapeTaskResult('known')).data.getMarkdown(), text);
+});
+
+test('rejects overflowing envelope codes instead of exposing nonfinite error metadata', async () => {
+    for (const code of ['1e309', '-1e309']) {
+        let calls = 0;
+        const client = new NstDataClient('test-token', { fetch: async () => {
+            calls++;
+            return new Response(`{"code":${code},"err":true,"msg":"private-response"}`);
+        } });
+        await assert.rejects(client.getCrawlStatus('known'), error => {
+            assert.ok(error instanceof NstDataApiError);
+            assert.match(error.message, /invalid response envelope/);
+            assert.equal(error.code, undefined);
+            assert.doesNotMatch(error.message, /private-response/);
+            return true;
+        });
+        assert.equal(calls, 1);
+    }
+});
+
 test('rejects missing tokens before a request', () => {
     for (const token of [undefined, null, '', '   ']) {
         assert.throws(() => new NstDataClient(token), /token/i);
