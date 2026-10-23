@@ -8,6 +8,7 @@
 - Add client/per-request deadlines, `AbortSignal`, optional response-byte limits and per-client `fetch` injection. The default deadline is 120 seconds per HTTP operation.
 - Reject API/storage redirects, including same-origin redirects, and never retry task creation automatically.
 - Preserve empty deferred content and propagate request controls to storage reads.
+- Reject malformed stored HTML/Markdown UTF-8 with `TypeError` without caching it; preserve valid Unicode, BOM and raw storage bytes.
 - Decode inline Base64 PDF/screenshots and UTF-8 raw text through the existing Buffer getters; prefer present inline content, including empty content, over references.
 - Preserve optional content `truncated` and expose the service-provided task `id` in result types. Reject malformed inline binary/raw content and truncation flags without including response values in errors.
 - Expose `NstDataApiError` HTTP/API codes without raw response bodies; preserve timeout and transport error types, including interrupted bodies.

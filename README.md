@@ -90,6 +90,8 @@ const markdown = await result.data?.getMarkdown({ timeoutMs: 15000 });
 
 Deferred getters inherit request controls, allow per-read overrides and cache successful reads, including empty text. Markdown/HTML getters return strings; PDF/screenshot/raw-data getters return `Buffer`. Missing content is `undefined`, distinct from an empty result.
 
+`getHtml`/`getMarkdown` reject malformed UTF-8 references with `TypeError` without caching them; `readStorage` and binary getters preserve bytes.
+
 Inline PDF/screenshots are decoded from Base64; inline raw text is encoded as UTF-8 bytes. Present inline content, including empty content, takes precedence over its reference. Otherwise the getter reads and caches the referenced bytes. `data.truncated` preserves the service's truncation flag; an absent flag does not prove the content is complete.
 
 API and storage redirects, including same-origin redirects, are rejected. Requests are not retried automatically. After an uncertain submission, recover by a known task ID instead of creating another task.

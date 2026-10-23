@@ -85,6 +85,32 @@ test('preserves empty inline and stored text without fetching again', async () =
     assert.equal(reads, 3);
 });
 
+test('stored HTML and Markdown reject malformed UTF-8 without caching or changing raw bytes', async () => {
+    const invalid = Buffer.concat([Buffer.from('private-body-'), Buffer.from([0xff])]);
+    const text = '\uFEFF中文 😀 literal replacement: \uFFFD';
+    for (const [field, getter] of [['htmlRef', 'getHtml'], ['markdownRef', 'getMarkdown']]) {
+        let body = invalid, reads = 0;
+        const client = new NstDataClient('fixture-token', { fetch: async url => {
+            if (!url.includes('/storage/read?')) return envelope({ data: { [field]: 'private-reference' } });
+            reads++;
+            return new Response(body);
+        } });
+        const data = (await client.getScrapeTaskResult('existing-task')).data;
+        await assert.rejects(data[getter](), error => {
+            assert.ok(error instanceof TypeError);
+            assert.match(error.message, /utf-8/i);
+            assert.doesNotMatch(error.message, /private-body|private-reference|fixture-token/);
+            return true;
+        });
+        assert.equal(reads, 1, 'a failed decode does not trigger another request');
+        assert.deepEqual(Buffer.from(await client.readStorage('private-reference')), invalid);
+        body = Buffer.from(text);
+        assert.equal(await data[getter](), text);
+        assert.equal(await data[getter](), text);
+        assert.equal(reads, 3, 'only successful decoded text is cached');
+    }
+});
+
 test('an already cancelled call makes no request', async () => {
     globalThis.fetch = async () => { assert.fail('must not send'); };
     const controller = new AbortController();

@@ -1,3 +1,6 @@
+// Preserve an initial BOM while rejecting malformed storage text.
+const storageTextDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
 /** Local HTTP controls; independent of the server-side request DTO timeout. */
 export interface RequestOptions {
     signal?: AbortSignal;
@@ -243,7 +246,7 @@ export class ScrapeDataDto {
         if (typeof this._html === 'string') return this._html;
         if (this.htmlRef && this.storageReader) {
             const buf = await this.storageReader(this.htmlRef, options);
-            this._html = Buffer.from(buf).toString('utf-8');
+            this._html = storageTextDecoder.decode(buf);
             return this._html;
         }
         return undefined;
@@ -253,7 +256,7 @@ export class ScrapeDataDto {
         if (typeof this._markdown === 'string') return this._markdown;
         if (this.markdownRef && this.storageReader) {
             const buf = await this.storageReader(this.markdownRef, options);
-            this._markdown = Buffer.from(buf).toString('utf-8');
+            this._markdown = storageTextDecoder.decode(buf);
             return this._markdown;
         }
         return undefined;

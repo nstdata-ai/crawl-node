@@ -90,6 +90,8 @@ const markdown = await result.data?.getMarkdown({ timeoutMs: 15000 });
 
 延迟 getter 继承请求控制，可在单次读取时覆盖；成功读取会缓存，包括空文本。Markdown／HTML 返回字符串，PDF／截图／原始数据返回 `Buffer`；缺失内容为 `undefined`，与空结果不同。
 
+`getHtml`／`getMarkdown` 遇到无效 UTF-8 引用正文时抛出 `TypeError`，不缓存解码失败的内容；`readStorage` 和二进制 getter 保留原字节。
+
 内联 PDF／截图按 Base64 解码，内联原始文本按 UTF-8 转为字节。内联内容存在时优先使用，包括空内容；否则读取并缓存引用字节。`data.truncated` 保留服务端截断标记；未返回该标记不代表内容一定完整。
 
 API 和存储请求拒绝所有重定向，包括同源跳转；请求不自动重试。提交结果不确定时，使用已知 ID 恢复，避免重复创建任务。
