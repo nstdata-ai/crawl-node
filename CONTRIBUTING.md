@@ -15,13 +15,17 @@ npm run check:package
 
 ## Local package installation
 
-Before registry publication, build the package from this checkout:
+Build an installable archive from the checkout:
 
 ```sh
 npm pack
 ```
 
-This produces `nstdata-ai-crawl-2.0.0.tgz`. From your application directory, pass its local path to `npm install`. Local installation does not publish a package or verify registry access.
+This produces `nstdata-ai-crawl-2.0.0.tgz`. Install it from a separate application directory:
+
+```sh
+npm install /path/to/crawl-node/nstdata-ai-crawl-2.0.0.tgz
+```
 
 Tests must use synthetic responses or loopback servers. Cover changes at the public request/result boundary, including failure, empty content, cancellation and resource cleanup. Package checks validate installation, imports, types and README examples.
 
@@ -30,5 +34,3 @@ Verify API changes against the public backend implementation when available, the
 Keep English and Chinese examples consistent. Real API examples may consume credits; run them only against authorized targets. Include no credentials or private responses in fixtures or bug reports.
 
 The online `example.ts` contains one synchronous scrape plus exported async and site workflows. `npm run example` submits only the synchronous task. The latter workflows stop after at most 20 status queries; site pagination stops after 100 batches or a repeated cursor. Each HTTP response is capped at 1 MiB. A supplied signal controls cancellation; the default signal has a 120-second deadline. Keep an existing task ID when local waiting stops.
-
-Before publishing, verify compatibility, package contents, license ownership and the required maintainer authorization.
