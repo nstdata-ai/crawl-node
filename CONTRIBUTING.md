@@ -27,7 +27,7 @@ This produces `nstdata-ai-crawl-2.0.0.tgz`. Install it from a separate applicati
 npm install /path/to/crawl-node/nstdata-ai-crawl-2.0.0.tgz
 ```
 
-Tests must use synthetic responses or loopback servers. Cover changes at the public request/result boundary, including failure, empty content, cancellation and resource cleanup. Package checks validate installation, imports, types and README examples.
+Tests must use synthetic responses or loopback servers. Cover changes at the public request/result boundary, including failure, empty content, cancellation and resource cleanup. Package checks validate installation, imports, types, packaged documentation links and the bilingual quick-start/async/site examples. Workflow fixtures cover success, failed tasks and missing content, including opaque-cursor pagination without resubmission.
 
 Verify API changes against the public backend implementation when available, then the official API documentation. Keep source checks separate from live-service results. Do not add automatic retries for task creation.
 

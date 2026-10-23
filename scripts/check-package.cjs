@@ -29,7 +29,7 @@ try {
     assert.ok(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8').includes(`## ${manifest.version} —`), 'Missing version in changelog');
     assert.equal(manifest.engines?.node, '>=22.18.0 <23 || >=24.0.0 <25');
     assert.deepEqual(lock.packages[''].engines, manifest.engines);
-    const allowed = /^(dist\/(?:index|client|models)\.(?:js|d\.ts)|package\.json|README(?:_zh)?\.md|LICENSE|CHANGELOG\.md|CONTRIBUTING\.md)$/;
+    const allowed = /^(dist\/(?:index|client|models)\.(?:js|d\.ts)|package\.json|README(?:_zh)?\.md|LICENSE|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|docs\/guide(?:_zh)?\.md)$/;
     const secretPatterns = [/-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/, /\bnpm_[a-zA-Z0-9]{30,}\b/, /\bgh[pousr]_[a-zA-Z0-9]{20,}\b/];
     for (const file of packed.files) {
         assert.match(file.path, allowed);
@@ -37,7 +37,7 @@ try {
         for (const pattern of secretPatterns) assert.ok(!pattern.test(text), `Secret-like content in ${file.path}`);
     }
     for (const file of ['dist/index.js', 'dist/index.d.ts', 'dist/client.js', 'dist/client.d.ts',
-        'dist/models.js', 'dist/models.d.ts', 'README.md', 'README_zh.md', 'LICENSE', 'CHANGELOG.md', 'CONTRIBUTING.md']) {
+        'dist/models.js', 'dist/models.d.ts', 'README.md', 'README_zh.md', 'LICENSE', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md', 'docs/guide.md', 'docs/guide_zh.md']) {
         assert.ok(packed.files.some(entry => entry.path === file), `Missing ${file}`);
     }
     fs.writeFileSync(path.join(temp, 'package.json'), '{"private":true}');
@@ -101,6 +101,33 @@ try {
         fs.writeFileSync(path.join(temp, sample), code[1]);
         typeFiles.push(sample);
     }
+    const guideSamples = [];
+    for (const file of ['docs/guide.md', 'docs/guide_zh.md']) {
+        const blocks = [...fs.readFileSync(path.join(root, file), 'utf8').matchAll(/```typescript\n([\s\S]*?)```/g)];
+        assert.equal(blocks.length, 2, `Missing workflow examples in ${file}`);
+        for (const [i, block] of blocks.entries()) {
+            const sample = `${path.basename(file)}-${i}.ts`;
+            fs.writeFileSync(path.join(temp, sample), block[1]);
+            typeFiles.push(sample);
+            guideSamples.push({ file: sample.replace(/\.ts$/, '.js'), kind: i === 0 ? 'async' : 'crawl' });
+        }
+    }
+    // Every relative user-document link must survive package installation.
+    for (const entry of packed.files.filter(file => file.path.endsWith('.md'))) {
+        const text = fs.readFileSync(path.join(root, entry.path), 'utf8');
+        for (const match of text.matchAll(/\[[^\]\n]+\]\(([^)\n]+)\)/g)) {
+            const target = match[1];
+            if (/^[a-z]+:/i.test(target)) continue;
+            const [relative, anchor] = target.split('#');
+            const linked = path.posix.normalize(path.posix.join(path.posix.dirname(entry.path), relative || path.posix.basename(entry.path)));
+            assert.ok(packed.files.some(file => file.path === linked), `Unpackaged link: ${entry.path} -> ${target}`);
+            if (anchor) {
+                const headings = [...fs.readFileSync(path.join(root, linked), 'utf8').matchAll(/^#+ (.+)$/gm)]
+                    .map(m => m[1].toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, '').replace(/ /g, '-'));
+                assert.ok(headings.includes(decodeURIComponent(anchor)), `Missing anchor: ${target}`);
+            }
+        }
+    }
     execFileSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '--strict',
         '--target', 'ES2022', '--module', 'CommonJS', '--types', 'node', '--typeRoots',
         path.join(root, 'node_modules/@types'), ...typeFiles], { cwd: temp, timeout: 10000, stdio: 'pipe' });
@@ -134,7 +161,60 @@ try {
             }), error => error.status === 1 && !error.stdout.includes('# Fixture'));
         }
     }
-    console.log(`PASS: ${packed.name}@${packed.version}; ${packed.files.length} files; allowlist/secret-pattern checks, empty-cache offline install, installed client regressions, CommonJS/ESM imports, installed declarations and EN/ZH quick-start success and pending/missing/failed refusal (synthetic fetch)`);
+    fs.writeFileSync(path.join(temp, 'guide-fixture.cjs'), `
+        const assert = require('node:assert/strict');
+        process.env.NSTDATA_API_TOKEN = 'fixture-token';
+        let calls = 0, creates = 0;
+        const kind = process.env.NSTDATA_GUIDE_KIND;
+        const failure = process.env.NSTDATA_GUIDE_FAILURE;
+        globalThis.fetch = async (url, init) => {
+            calls++;
+            assert.equal(init.headers['x-api-key'], 'fixture-token');
+            let data;
+            if (init.method === 'POST') {
+                creates++;
+                assert.equal(creates, 1);
+                assert.equal(JSON.parse(init.body).formats[0], 'markdown');
+                assert.equal(url, kind === 'async'
+                    ? 'https://api.nstdata.io/api/v1/crawl/scrape?async=true'
+                    : 'https://api.nstdata.io/api/v1/crawl');
+                data = { id: 'fixture-id' };
+            } else if (url.includes('/pages')) {
+                assert.equal(kind, 'crawl');
+                const next = new URL(url).searchParams.get('after_cursor');
+                assert.ok(next === null || next === 'cursor+/=');
+                data = { data: [{ url: 'https://example.com/', status: 'completed', success: true,
+                    data: failure === 'missing' ? {} : { markdown: '# Fixture' } }],
+                    nextCursor: next === null ? 'cursor+/=' : undefined };
+            } else {
+                assert.equal(url, kind === 'async'
+                    ? 'https://api.nstdata.io/api/v1/crawl/scrape/fixture-id'
+                    : 'https://api.nstdata.io/api/v1/crawl/fixture-id');
+                data = { status: failure === 'failed' ? 'failed' : 'completed',
+                    success: failure !== 'failed', failed: failure === 'failed' ? 1 : 0,
+                    data: failure === 'missing' ? {} : { markdown: '# Fixture' } };
+            }
+            return Response.json({ code: 200, err: false, data });
+        };
+        process.on('beforeExit', () => {
+            assert.equal(creates, 1);
+            assert.equal(calls, kind === 'async' || failure === 'failed' ? 2 : failure === 'missing' ? 3 : 4);
+        });
+    `);
+    for (const sample of guideSamples) {
+        for (const failure of ['', 'failed', 'missing']) {
+            const options = { cwd: temp, timeout: 10000, encoding: 'utf8', stdio: 'pipe',
+                env: { ...process.env, NSTDATA_GUIDE_KIND: sample.kind, NSTDATA_GUIDE_FAILURE: failure } };
+            if (failure) {
+                assert.throws(() => execFileSync(process.execPath, ['--require', './guide-fixture.cjs', sample.file], options),
+                    error => error.status === 1 && !error.stdout.includes('# Fixture')
+                        && error.stderr.includes('Workflow stopped'));
+            } else {
+                assert.match(execFileSync(process.execPath, ['--require', './guide-fixture.cjs', sample.file], options), /# Fixture/);
+            }
+        }
+    }
+    console.log(`PASS: ${packed.name}@${packed.version}; ${packed.files.length} files; allowlist/secret-pattern checks, empty-cache offline install, installed client regressions, CommonJS/ESM imports, installed declarations and EN/ZH quick-start and async/site guide examples, installed documentation links (synthetic fetch)`);
 } finally {
     fs.rmSync(temp, { recursive: true, force: true });
 }

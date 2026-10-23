@@ -13,7 +13,9 @@
     "README_zh.md",
     "LICENSE",
     "CHANGELOG.md",
-    "CONTRIBUTING.md"
+    "CONTRIBUTING.md",
+    "docs",
+    "SECURITY.md"
   ],
   "repository": {
     "type": "git",
