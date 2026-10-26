@@ -19,8 +19,6 @@
 
 支持 Node.js 22（22.18 及以上）和 24。
 
-> 2.0.0 尚未在 npm 发布。从源码安装见[贡献说明](CONTRIBUTING.md)。
-
 ```sh
 npm install @nstdata-ai/crawl@2.0.0
 ```

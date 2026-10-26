@@ -1,7 +1,7 @@
 {
   "name": "@nstdata-ai/crawl",
   "version": "2.0.0",
-  "description": "Node.js SDK for nstdata",
+  "description": "Node.js SDK for Nstdata Crawl",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "engines": {

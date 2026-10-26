@@ -19,8 +19,6 @@ Retrieve webpages as Markdown, HTML, links, PDF, screenshots or raw data from No
 
 Supports Node.js 22 (22.18 or later) and 24.
 
-> Version 2.0.0 is not yet available on npm. For source installation, see [Contributing](CONTRIBUTING.md).
-
 ```sh
 npm install @nstdata-ai/crawl@2.0.0
 ```

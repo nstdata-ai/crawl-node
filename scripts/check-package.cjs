@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -26,7 +27,7 @@ try {
         const text = fs.readFileSync(path.join(root, file), 'utf8');
         assert.ok(text.includes(`npm install ${manifest.name}@${manifest.version}`), `Missing versioned installation command in ${file}`);
     }
-    assert.ok(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8').includes(`## ${manifest.version} —`), 'Missing version in changelog');
+    assert.ok(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8').split(/\r?\n/).includes(`## ${manifest.version}`), 'Missing version in changelog');
     assert.equal(manifest.engines?.node, '>=22.18.0 <23 || >=24.0.0 <25');
     assert.deepEqual(lock.packages[''].engines, manifest.engines);
     const allowed = /^(dist\/(?:index|client|models)\.(?:js|d\.ts)|package\.json|README(?:_zh)?\.md|LICENSE|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|docs\/guide(?:_zh)?\.md)$/;
@@ -41,7 +42,9 @@ try {
         assert.ok(packed.files.some(entry => entry.path === file), `Missing ${file}`);
     }
     fs.writeFileSync(path.join(temp, 'package.json'), '{"private":true}');
-    npm(['install', '--offline', '--cache', path.join(temp, 'npm-cache'), '--ignore-scripts', '--no-audit', '--no-fund', path.join(temp, packed.filename)], temp);
+    const archive = process.argv[2] ?? path.join(temp, packed.filename);
+    assert.equal('sha512-' + createHash('sha512').update(fs.readFileSync(archive)).digest('base64'), packed.integrity, 'Archive must match this checkout');
+    npm(['install', '--offline', '--cache', path.join(temp, 'npm-cache'), '--ignore-scripts', '--no-audit', '--no-fund', archive], temp);
     const installedManifest = JSON.parse(fs.readFileSync(path.join(temp, 'node_modules/@nstdata-ai/crawl/package.json'), 'utf8'));
     assert.deepEqual(installedManifest.engines, manifest.engines);
     fs.mkdirSync(path.join(temp, 'fixtures'));
