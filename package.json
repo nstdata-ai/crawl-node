@@ -40,6 +40,7 @@
   "devDependencies": {
     "typescript": "^5.0.0",
     "@types/node": "^18.0.0",
-    "ts-node": "^10.9.1"
+    "ts-node": "^10.9.1",
+    "marked": "18.1.1"
   }
 }

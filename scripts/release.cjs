@@ -40,6 +40,7 @@ async function checkEnvironment(env, fetchImpl) {
     const result = await request(url, env.GH_TOKEN, fetchImpl);
     assert.equal(result.status, 200, 'Configure npm-production before dispatch');
     const environment = result.data;
+    assert.equal(environment.can_admins_bypass, false, 'Disable administrator bypass on npm-production');
     assert.ok(environment.protection_rules?.some(rule => rule.type === 'required_reviewers' && rule.reviewers?.length > 0), 'Required reviewers must be configured');
     assert.equal(environment.deployment_branch_policy?.custom_branch_policies, true, 'Use selected deployment branches');
     assert.equal(environment.deployment_branch_policy?.protected_branches, false);

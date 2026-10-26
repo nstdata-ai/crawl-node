@@ -295,7 +295,7 @@ export class ScrapeDataDto {
 
 export interface TaskResultResponseDto {
     code?: number;          // Custom status code
-    data?: ScrapeDataDto;   // The extracted scrape/crawl data
+    data?: ScrapeDataDto | null; // Extracted data; null is retained when returned by the service
     errorCode?: string;     // Error code identifier if any
     errorMessage?: string;  // Detailed error message
     id?: string;           // Task ID when supplied by the service; not a queryability guarantee
@@ -316,7 +316,7 @@ export interface CrawlStatusResponseDto {
 
 /** One page's normalized result within a crawl session. */
 export interface CrawlPageItemResponseDto {
-    data?: ScrapeDataDto;  // Extracted data for this page
+    data?: ScrapeDataDto | null; // Extracted page data, or the service's explicit null
     errorCode?: string;    // Error code if any
     errorMessage?: string; // Detailed error message
     status?: string;       // Status of this page extraction
@@ -329,7 +329,7 @@ export interface CrawlPageItemResponseDto {
 export interface CrawlPageListResponseDto {
     code?: number;                       // Custom status code
     completed?: number;                  // Number of completed pages
-    data?: CrawlPageItemResponseDto[];   // List of page results
+    data?: CrawlPageItemResponseDto[] | null; // Page results, or the service's explicit null
     nextCursor?: string;                 // Cursor for fetching the next page of results
     prevCursor?: string;                 // Cursor for fetching the previous page of results
     total?: number;                      // Total number of pages
