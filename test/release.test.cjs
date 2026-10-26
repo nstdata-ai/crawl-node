@@ -95,8 +95,9 @@ test('registry checks distinguish an absent version from errors and require exac
 test('publish CLI uses one checked archive without retries and preserves safe failure diagnostics', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nstdata-release-cli-'));
     try {
+        const current = require('../package.json');
         const bytes = Buffer.from('fixture archive');
-        const manifest = { name: pkg.name, version: pkg.version, commit, filename: 'nstdata-ai-crawl-2.0.0.tgz',
+        const manifest = { name: current.name, version: current.version, commit, filename: `nstdata-ai-crawl-${current.version}.tgz`,
             sha256: hash(bytes), integrity: `sha512-${hash(bytes, 'sha512', 'base64')}` };
         const text = JSON.stringify(manifest);
         fs.writeFileSync(path.join(directory, 'manifest.json'), text);
@@ -114,7 +115,7 @@ test('publish CLI uses one checked archive without retries and preserves safe fa
             }
             if(args[0]==='install') {
                 const folder=path.join(process.cwd(),'node_modules/@nstdata-ai/crawl');fs.mkdirSync(folder,{recursive:true});
-                fs.writeFileSync(path.join(folder,'package.json'),JSON.stringify({name:'${pkg.name}',version:'${pkg.version}',main:'index.cjs'}));
+                fs.writeFileSync(path.join(folder,'package.json'),JSON.stringify({name:'${manifest.name}',version:'${manifest.version}',main:'index.cjs'}));
                 fs.writeFileSync(path.join(folder,'index.cjs'),'exports.NstDataClient=class {};');
             }
         `, { mode: 0o755 });
@@ -125,9 +126,9 @@ test('publish CLI uses one checked archive without retries and preserves safe fa
                 let data,status=200;
                 if(url.includes('/deployment-branch-policies?')) data=${JSON.stringify(policies)};
                 else if(url==='https://api.github.com/repos/nstdata-ai/crawl-node/environments/npm-production') data=${JSON.stringify(environment)};
-                else if(url==='https://registry.npmjs.org/%40nstdata-ai%2Fcrawl/2.0.0') {
+                else if(url==='https://registry.npmjs.org/%40nstdata-ai%2Fcrawl/${manifest.version}') {
                     const done=fs.existsSync(process.env.RELEASE_TEST_LOG);
-                    status=done?200:404;data=${JSON.stringify({ name: pkg.name, version: pkg.version, dist: { integrity: manifest.integrity } })};
+                    status=done?200:404;data=${JSON.stringify({ name: manifest.name, version: manifest.version, dist: { integrity: manifest.integrity } })};
                 } else throw new Error('Unexpected network request');
                 return {status,json:async()=>data};
             };
@@ -135,15 +136,15 @@ test('publish CLI uses one checked archive without retries and preserves safe fa
         for (const failure of [false, true]) {
             fs.rmSync(log, { force: true });
             const result = spawnSync(process.execPath, ['--require', preload, path.resolve(__dirname, '../scripts/release.cjs'), 'publish', directory], {
-                env: { ...process.env, ...env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, NODE_AUTH_TOKEN: '', NPM_TOKEN: '',
+                env: { ...process.env, ...env, RELEASE_VERSION: manifest.version, PATH: `${bin}${path.delimiter}${process.env.PATH}`, NODE_AUTH_TOKEN: '', NPM_TOKEN: '',
                     RELEASE_MANIFEST_SHA256: hash(text), RELEASE_TEST_LOG: log, RELEASE_TEST_FAIL: failure ? '1' : '0', GITHUB_STEP_SUMMARY: path.join(directory, 'summary.md') },
                 encoding: 'utf8', timeout: 15000,
             });
+            assert.equal(result.status, failure ? 1 : 0, result.stderr);
             const commands = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
             assert.deepEqual(commands[0], ['publish', path.join(directory, manifest.filename), '--access', 'public', '--registry',
                 'https://registry.npmjs.org', '--ignore-scripts', '--provenance', '--fetch-retries=0']);
             assert.equal(commands.filter(args => args[0] === 'publish').length, 1);
-            assert.equal(result.status, failure ? 1 : 0, result.stderr);
             assert.equal(commands.length, failure ? 1 : 2);
             if (failure) {
                 assert.match(result.stderr, /npm publish failed \(exit 1, E403\)/);
