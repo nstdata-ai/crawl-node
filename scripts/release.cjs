@@ -106,7 +106,7 @@ async function main(mode, directory, env = process.env) {
         const { manifest, archive } = verifyArtifact(directory, env);
         await checkRegistry(manifest.version);
         console.log('Publishing once. If this step fails, inspect npm before another dispatch.');
-        npm(['publish', archive, '--access', 'public', '--registry', registry, '--ignore-scripts', '--provenance']);
+        npm(['publish', archive, '--access', 'public', '--registry', registry, '--ignore-scripts', '--provenance', '--fetch-retries=0']);
         await checkRegistry(manifest.version, manifest.integrity);
         const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'nstdata-public-install-'));
         try {

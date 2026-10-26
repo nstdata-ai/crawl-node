@@ -73,7 +73,6 @@ jobs:
       RELEASE_COMMIT: ${{ inputs.commit }}
       RELEASE_MANIFEST_SHA256: ${{ needs.package.outputs.manifest-sha256 }}
       GH_TOKEN: ${{ github.token }}
-      NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-release.npmrc
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -88,3 +87,5 @@ jobs:
           name: npm-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release
       - run: node scripts/release.cjs publish "$RUNNER_TEMP/release"
+        env:
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-release.npmrc
