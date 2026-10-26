@@ -1,50 +1,66 @@
-# nstdata crawl SDK (Node.js)
+# Nstdata Crawl SDK for Node.js
 
 [English](README.md)
 
-nstdata crawl 的 Node.js SDK，提供高级的网页抓取和爬虫服务接口。
+将网页内容转换为 Markdown、HTML、链接、PDF、截图或原始数据，供 Node.js 应用读取。
+
+## 功能与使用入口
+
+| 你要完成的任务 | 使用方式 | 得到什么 |
+|---|---|---|
+| 抓取一个页面并立即读取正文 | [快速开始](#快速开始) | 已完成结果及正文 getter |
+| 提交单页任务，稍后获取结果 | [异步单页](docs/guide_zh.md#异步单页) | 任务 ID、状态及页面内容 |
+| 从入口页发现并抓取站内页面 | [整站与分页](docs/guide_zh.md#整站与分页) | 整站进度、逐页结果及游标 |
+| 等待 JavaScript 内容、选择区域或设置请求头 | [抓取参数](docs/guide_zh.md#抓取参数) | 可配置的页面抓取请求 |
+| 读取多种格式、metadata 或延迟引用 | [内容与返回结果](docs/guide_zh.md#内容与返回结果) | 文本、字节、链接及元数据 |
+| 设置超时、取消和排查失败 | [请求控制与错误](docs/guide_zh.md#请求控制与错误) | 有界请求与可区分的失败类型 |
 
 ## 安装
 
-```bash
-npm install @nstdata-ai/crawl
+支持 Node.js 22（22.18 及以上）和 24。
+
+```sh
+npm install @nstdata-ai/crawl@2.0.0
 ```
 
-## 功能特性
-
-- **基础抓取:** 同步获取页面的 HTML 和 Markdown 格式内容。
-- **截图与 PDF:** 支持整页截图与页面导出为 PDF。
-- **浏览器动作编排:** 支持等待元素、表单填充、点击、滚动以及执行自定义 JavaScript。
-- **自定义配置:** 携带 Cookie、自定义请求头、模拟移动端等。
-- **正文提取与过滤:** 自动提取高质量文章正文，去除广告、导航栏和页脚。
-- **代理位置:** 通过 `proxy.country` 指定代理出口国家。
-- **同步或异步抓取:** 使用同一个抓取接口；异步提交返回任务 ID，可继续轮询结果。
-- **批量抓取 (Crawl):** 按深度、最大页数等条件遍历站点。
+从 1.x 升级前，请阅读[不兼容变化](CHANGELOG.md#compatibility)。
 
 ## 快速开始
 
-您可以参考 [example.ts](./example.ts) 了解所有场景的完整使用示例。
+在环境变量 `NSTDATA_API_TOKEN` 中设置 API Key。下例提交一次同步单页任务，成功后输出 Markdown；调用会消耗服务额度。
 
 ```typescript
 import { NstDataClient, Format } from '@nstdata-ai/crawl';
 
-// 使用您的 API Token 初始化客户端
-const TOKEN = process.env.NSTDATA_API_TOKEN || "YOUR_API_TOKEN";
+const TOKEN = process.env.NSTDATA_API_TOKEN;
 
 async function main() {
+    if (!TOKEN?.trim()) throw new Error('请先在本机设置 NSTDATA_API_TOKEN');
     const client = new NstDataClient(TOKEN);
-    
-    // 提交基础的抓取任务
+
     const res = await client.submitScrapeTaskSync({
         url: "https://example.com/",
         formats: [Format.MARKDOWN],
         timeout: 60000,
     });
-    
-    // 输出抓取到的 Markdown 内容
-    const md = await res.data?.getMarkdown();
+
+    if (res.success === false || res.status === 'failed' || res.status === 'expired') {
+        throw new Error('抓取任务失败');
+    }
+    if (res.status !== 'completed' || !res.data) throw new Error('未返回已完成的抓取数据');
+    const md = await res.data.getMarkdown();
+    if (md === undefined) throw new Error('未返回 Markdown 内容');
     console.log(md);
 }
 
-main().catch(console.error);
+main().catch(() => {
+    console.error('抓取失败，请检查任务状态和本地配置。');
+    process.exitCode = 1;
+});
 ```
+
+## 继续使用
+
+[完整使用指南](docs/guide_zh.md)包含异步与整站工作流、参数和返回值参考、内容格式及错误处理。SDK 调用现有 Nstdata 服务，无需自行部署抓取服务。
+
+[API 文档](https://docs.nstdata.io/docs/crawl) · [贡献说明](CONTRIBUTING.md) · [安全反馈](SECURITY.md) · [MIT 许可](LICENSE)

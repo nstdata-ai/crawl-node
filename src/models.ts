@@ -1,3 +1,23 @@
+// Preserve an initial BOM while rejecting malformed storage text.
+const storageTextDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+/** Local HTTP controls; independent of the server-side request DTO timeout. */
+export interface RequestOptions {
+    signal?: AbortSignal;
+    /** Positive milliseconds, including response-body consumption. */
+    timeoutMs?: number;
+    /** Optional upper bound for each API or storage response body, in bytes. */
+    maxResponseBytes?: number;
+}
+
+export interface ClientOptions {
+    baseURL?: string;
+    /** Per-client transport for API/storage; must honor signal and redirect: 'manual'. Defaults to global fetch. */
+    fetch?: typeof globalThis.fetch;
+    /** Per HTTP operation, including storage reads. Defaults to 120000 ms. */
+    timeoutMs?: number;
+}
+
 // Supported output formats for ScrapeRequestDto.formats
 export enum Format {
     MARKDOWN = 'markdown',
@@ -17,6 +37,7 @@ export enum TaskStatus {
     PROCESSING = 'processing',
     COMPLETED = 'completed',
     FAILED = 'failed',
+    EXPIRED = 'expired',
     /** A crawl session that is still fetching pages. */
     SCRAPING = 'scraping'
 }
@@ -25,7 +46,7 @@ export enum TaskStatus {
 export enum ActionType {
     CLICK = 'click',                                          // click an element; requires selector
     WAIT = 'wait',                                            // wait a fixed time; requires milliseconds
-    WAIT_SELECTOR = 'waitSelector',                           // wait until element is visible; requires selector
+    WAIT_SELECTOR = 'waitSelector',                           // wait for a selector; requires selector
     SCROLL_X = 'scrollX',                                     // scroll horizontally by x pixels
     SCROLL_Y = 'scrollY',                                     // scroll vertically by y pixels
     SCROLL_TO = 'scrollTo',                                   // scroll to an element; requires selector
@@ -44,7 +65,7 @@ export interface ActionDto {
     execute?: string;              // JavaScript code snippet to execute
     fullScreenshot?: boolean;      // Set to true to capture a full-page screenshot
     particularScreenshot?: string; // CSS selector of an element to screenshot
-    urlPattern?: string;           // URL pattern to wait for (regex support)
+    urlPattern?: string;           // Native network-wait pattern; interpreted by the service
     x?: number;                    // X coordinate for scroll/click
     y?: number;                    // Y coordinate for scroll/click
     key?: string;                  // Keyboard key to press
@@ -102,10 +123,7 @@ export class ActionBuilder {
         return { type: ActionType.SCREENSHOT, fullScreenshot: full || undefined, particularScreenshot: selector };
     }
 
-    /**
-     * Wait for a network response whose URL matches urlPattern
-     * (supports * wildcard).
-     */
+    /** Build a network-wait action; the service interprets urlPattern. */
     static waitForRequest(urlPattern: string, timeoutMs?: number): ActionDto {
         return { type: ActionType.WAIT_FOR_REQUEST_COMPLETION, urlPattern, milliseconds: timeoutMs };
     }
@@ -135,9 +153,9 @@ export interface ScrapeRequestDto {
     cookies?: CookieDto[];             // Optional cookies to include in the request
     proxy?: ProxyDto;                  // Proxy settings, such as exit country
     excludeTags?: string[];            // HTML tags to remove entirely (e.g., ['nav', 'footer'])
-    formats?: string[];                // Desired output formats (e.g., ['markdown', 'html', 'links'])
+    formats: string[];                 // At least one output format (e.g., ['markdown', 'html', 'links'])
     headers?: Record<string, string>;  // Custom HTTP headers
-    includeTags?: string[];            // Tags to keep. WARNING: strips all other tags (keeping text), which may break markdown
+    includeTags?: string[];            // Included HTML tags; extraction behavior is service-defined
     jsRender?: JsRenderDto;            // JavaScript rendering instructions
     mobile?: boolean;                  // Whether to emulate a mobile device
     onlyMainContent?: boolean;         // Automatically extract main article content and remove noise
@@ -155,12 +173,12 @@ export interface CrawlRequestDto {
     cookies?: CookieDto[];             // Optional cookies to include in the request
     proxy?: ProxyDto;                  // Proxy settings, such as exit country
     excludeTags?: string[];            // HTML tags to remove entirely
-    excludeUrls?: string[];            // Regex patterns to exclude specific URLs from crawling
-    formats?: string[];                // Desired output formats (e.g., ['markdown', 'html'])
+    excludeUrls?: string[];            // Native URL filters passed unchanged to the service
+    formats: string[];                 // At least one output format (e.g., ['markdown', 'html'])
     headers?: Record<string, string>;  // Custom HTTP headers
     ignoreQuery?: boolean;             // Whether to ignore URL query parameters for deduplication
-    includeTags?: string[];            // Tags to keep. WARNING: strips all other tags
-    includeUrls?: string[];            // Regex patterns to only crawl matching URLs
+    includeTags?: string[];            // Included HTML tags; extraction behavior is service-defined
+    includeUrls?: string[];            // Native URL filters passed unchanged to the service
     jsRender?: JsRenderDto;            // JavaScript rendering instructions
     maxDepth?: number;                 // Maximum depth of links to follow
     maxPages?: number;                 // Maximum number of pages to crawl
@@ -173,7 +191,7 @@ export interface CrawlRequestDto {
 
 export interface SubmitResponseDto {
     cached?: boolean; // True if the response was served from cache
-    code?: number;    // HTTP status code
+    code?: number;    // Service response code
     id?: string;      // Task ID
     status?: string;  // Task status message
 }
@@ -189,83 +207,85 @@ export interface PageMetadataDto {
 
 export class ScrapeDataDto {
     public links?: string[];         // List of extracted hyperlinks
-    public htmlRef?: string;         // Reference link to fetch the HTML content
-    public markdownRef?: string;     // Reference link to fetch the Markdown content
+    public htmlRef?: string; // Opaque storage reference for HTML
+    public markdownRef?: string; // Opaque storage reference for Markdown
     public metadata?: PageMetadataDto; // Extracted page metadata and SEO tags
-    public pdfRef?: string;          // Reference link to fetch the PDF
-    public rawDataRef?: string;      // Reference link to fetch the raw data
-    public screenshotRef?: string;   // Reference link to fetch the screenshot
+    public pdfRef?: string; // Opaque storage reference for PDF
+    public rawDataRef?: string; // Opaque storage reference for raw data
+    public screenshotRef?: string; // Opaque storage reference for screenshot
+    public truncated?: boolean;      // Whether the service truncated the content
 
     private _html?: string;            // Raw HTML content
     private _markdown?: string;        // Extracted content formatted as Markdown
-    private _pdf?: Buffer;             // Base64 encoded PDF
+    private _pdf?: Buffer;             // Original PDF bytes
     private _rawData?: Buffer;         // Underlying raw response data
-    private _screenshot?: Buffer;      // Base64 encoded screenshot image
+    private _screenshot?: Buffer;      // Original screenshot bytes
 
-    private storageReader?: (ref: string) => Promise<ArrayBuffer>;
+    private storageReader?: (ref: string, options?: RequestOptions) => Promise<ArrayBuffer>;
 
-    constructor(data: any, storageReader?: (ref: string) => Promise<ArrayBuffer>) {
+    constructor(data: any, storageReader?: (ref: string, options?: RequestOptions) => Promise<ArrayBuffer>) {
         if (!data) return;
-        this.links = data.links;
-        this.htmlRef = data.htmlRef;
-        this.markdownRef = data.markdownRef;
-        this.metadata = data.metadata;
-        this.pdfRef = data.pdfRef;
-        this.rawDataRef = data.rawDataRef;
-        this.screenshotRef = data.screenshotRef;
+        this.links = data.links ?? undefined;
+        this.htmlRef = data.htmlRef ?? undefined;
+        this.markdownRef = data.markdownRef ?? undefined;
+        this.metadata = data.metadata ?? undefined;
+        this.pdfRef = data.pdfRef ?? undefined;
+        this.rawDataRef = data.rawDataRef ?? undefined;
+        this.screenshotRef = data.screenshotRef ?? undefined;
+        this.truncated = data.truncated ?? undefined;
 
         this._html = data.html;
         this._markdown = data.markdown;
-        this._pdf = undefined;
-        this._rawData = undefined;
-        this._screenshot = undefined;
+        this._pdf = data.pdf == null ? undefined : Buffer.from(data.pdf, 'base64');
+        this._rawData = data.rawData == null ? undefined : Buffer.from(data.rawData, 'utf8');
+        this._screenshot = data.screenshot == null ? undefined : Buffer.from(data.screenshot, 'base64');
         this.storageReader = storageReader;
     }
 
-    async getHtml(): Promise<string | undefined> {
-        if (this._html) return this._html;
+    async getHtml(options?: RequestOptions): Promise<string | undefined> {
+        if (typeof this._html === 'string') return this._html;
         if (this.htmlRef && this.storageReader) {
-            const buf = await this.storageReader(this.htmlRef);
-            this._html = Buffer.from(buf).toString('utf-8');
+            const buf = await this.storageReader(this.htmlRef, options);
+            this._html = storageTextDecoder.decode(buf);
             return this._html;
         }
         return undefined;
     }
 
-    async getMarkdown(): Promise<string | undefined> {
-        if (this._markdown) return this._markdown;
+    async getMarkdown(options?: RequestOptions): Promise<string | undefined> {
+        if (typeof this._markdown === 'string') return this._markdown;
         if (this.markdownRef && this.storageReader) {
-            const buf = await this.storageReader(this.markdownRef);
-            this._markdown = Buffer.from(buf).toString('utf-8');
+            const buf = await this.storageReader(this.markdownRef, options);
+            this._markdown = storageTextDecoder.decode(buf);
             return this._markdown;
         }
         return undefined;
     }
 
-    async getPdf(): Promise<Buffer | undefined> {
+    async getPdf(options?: RequestOptions): Promise<Buffer | undefined> {
         if (this._pdf) return this._pdf;
         if (this.pdfRef && this.storageReader) {
-            const buf = await this.storageReader(this.pdfRef);
+            const buf = await this.storageReader(this.pdfRef, options);
             this._pdf = Buffer.from(buf);
             return this._pdf;
         }
         return undefined;
     }
 
-    async getRawData(): Promise<Buffer | undefined> {
+    async getRawData(options?: RequestOptions): Promise<Buffer | undefined> {
         if (this._rawData) return this._rawData;
         if (this.rawDataRef && this.storageReader) {
-            const buf = await this.storageReader(this.rawDataRef);
+            const buf = await this.storageReader(this.rawDataRef, options);
             this._rawData = Buffer.from(buf);
             return this._rawData;
         }
         return undefined;
     }
 
-    async getScreenshot(): Promise<Buffer | undefined> {
+    async getScreenshot(options?: RequestOptions): Promise<Buffer | undefined> {
         if (this._screenshot) return this._screenshot;
         if (this.screenshotRef && this.storageReader) {
-            const buf = await this.storageReader(this.screenshotRef);
+            const buf = await this.storageReader(this.screenshotRef, options);
             this._screenshot = Buffer.from(buf);
             return this._screenshot;
         }
@@ -278,6 +298,7 @@ export interface TaskResultResponseDto {
     data?: ScrapeDataDto;   // The extracted scrape/crawl data
     errorCode?: string;     // Error code identifier if any
     errorMessage?: string;  // Detailed error message
+    id?: string;           // Task ID when supplied by the service; not a queryability guarantee
     status?: string;        // Current status (e.g., 'completed', 'failed')
     success?: boolean;      // True if the task executed successfully
 }
@@ -319,6 +340,6 @@ export interface ListCrawlPagesOptions {
     afterCursor?: string;
     /** Pages backward; take it from the previous response's prevCursor. */
     beforeCursor?: string;
-    /** Page size (server default 20, max 100). */
+    /** Requested page size; service limits are enforced by the API. */
     limit?: number;
 }

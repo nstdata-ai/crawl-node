@@ -1,0 +1,7 @@
+{
+  "processing": { "code": 200, "err": false, "data": { "status": "processing", "id": "fixture-task" } },
+  "completed": { "code": 200, "err": false, "data": { "status": "completed", "success": true, "data": { "markdown": "# Fixture", "html": "", "metadata": { "title": "Fixture" } } } },
+  "failed": { "code": 200, "err": false, "data": { "status": "failed", "success": false, "errorCode": "FIXTURE_FAILURE", "errorMessage": "Fixture task failed" } },
+  "pages": { "code": 200, "err": false, "data": { "total": 2, "nextCursor": "next /&", "data": [ { "taskId": "one", "status": "completed", "success": true, "data": { "markdownRef": "page-ref" } }, { "taskId": "two", "status": "failed", "success": false } ] } },
+  "lastPage": { "code": 200, "err": false, "data": { "total": 2, "data": [] } }
+}
