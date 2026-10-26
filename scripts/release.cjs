@@ -79,7 +79,14 @@ async function checkRegistry(version, integrity, fetchImpl) {
 }
 
 function npm(args, cwd = root) {
-    return execFileSync('npm', args, { cwd, encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'] });
+    const operation = `npm ${args[0]}${args[0] === 'run' ? ` ${args[1]}` : ''}`;
+    console.log(`Running ${operation}`);
+    try {
+        return execFileSync('npm', args, { cwd, encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+        const code = String(error.stderr ?? '').match(/^npm error code ([A-Z][A-Z0-9_]{1,40})\s*$/m)?.[1];
+        throw Object.assign(new Error(`${operation} failed (exit ${error.status ?? 'unavailable'}${code ? `, ${code}` : ''}). Inspect this stage before another dispatch.`), { code: 'RELEASE_COMMAND_FAILED' });
+    }
 }
 
 async function main(mode, directory, env = process.env) {
@@ -122,7 +129,7 @@ async function main(mode, directory, env = process.env) {
 module.exports = { validateSource, checkEnvironment, verifyArtifact, checkRegistry, request, hash };
 if (require.main === module) {
     main(process.argv[2], path.resolve(process.argv[3] ?? '')).catch(error => {
-        console.error(error.code === 'ERR_ASSERTION' ? error.message : `Release operation failed (${error.code ?? error.status ?? 'transport error'}).`);
+        console.error(['ERR_ASSERTION', 'RELEASE_COMMAND_FAILED'].includes(error.code) ? error.message : `Release operation failed (${error.code ?? error.status ?? 'transport error'}).`);
         console.error('Release stopped. Do not blindly rerun: inspect the failed step and registry version first.');
         process.exitCode = 1;
     });
