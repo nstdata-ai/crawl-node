@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { inspectDocument } = require('../scripts/documentation.cjs');
+const { inspectDocument, installationCommand, sampleCommands } = require('../scripts/documentation.cjs');
 
 test('documentation rendering catches the observed Chinese emphasis regression', () => {
     assert.throws(() => inspectDocument('**用途：**提交', 'guide.md'), /emphasis/);
@@ -41,4 +41,34 @@ test('nested executable fences cannot be silently excluded from runnable samples
         'guide.md'), /nested executable/i);
     assert.throws(() => inspectDocument('- Save as `nested.mts`.\n\n  ```ts\n  console.log(1);\n  ```',
         'guide.md'), /nested executable/i);
+});
+
+test('documented installation requires the public package command', () => {
+    const document = inspectDocument('```sh\nnpm install @nstdata-ai/crawl\n```', 'README.md');
+    assert.deepEqual(installationCommand(document, '@nstdata-ai/crawl'), ['npm', 'install', '@nstdata-ai/crawl']);
+    for (const command of ['npm install ./candidate.tgz', 'npm install @nstdata-ai/crawl@1.0.1']) {
+        assert.throws(() => installationCommand(inspectDocument('```sh\n' + command + '\n```', 'README.md'),
+            '@nstdata-ai/crawl'), /public installation/);
+    }
+    assert.throws(() => installationCommand(inspectDocument('Use the local installation steps.', 'README.md'),
+        '@nstdata-ai/crawl'), /public installation/);
+});
+
+test('runnable documentation uses its own command and environment text', () => {
+    const source = '```dotenv\nNSTDATA_API_TOKEN=your-api-key\n```\n\n`demo.mts`\n\n'
+        + '```typescript\nconsole.log(1);\n```\n\n```sh\nnode --env-file=.env demo.mts\n```';
+    const document = inspectDocument(source, 'README.md');
+    assert.deepEqual(document.environments, ['NSTDATA_API_TOKEN=your-api-key']);
+    assert.deepEqual([...sampleCommands(document)], [['demo.mts', ['--env-file=.env', 'demo.mts']]]);
+    for (const changed of [source.replace('--env-file=.env', '--env-file=.wrong'),
+        source.replace('node --env-file=.env demo.mts', 'node --env-file=.env typo.mts')]) {
+        assert.throws(() => sampleCommands(inspectDocument(changed, 'README.md')), /command/);
+    }
+});
+
+test('unhandled or nested shell and environment fences cannot bypass verification', () => {
+    for (const source of ['```bash\nnode demo.mts\n```', '```sh\ncurl https://example.com\n```',
+        '> ```sh\n> npm pack\n> ```', '> ```dotenv\n> KEY=value\n> ```']) {
+        assert.throws(() => inspectDocument(source, 'guide.md'), /command|fence|nested/i);
+    }
 });

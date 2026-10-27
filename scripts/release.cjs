@@ -114,12 +114,12 @@ async function main(mode, directory, env = process.env) {
         const { manifest, archive } = verifyArtifact(directory, env);
         await checkRegistry(manifest.version);
         console.log('Publishing once. If this step fails, inspect npm before another dispatch.');
-        npm(['publish', archive, '--access', 'public', '--registry', registry, '--ignore-scripts', '--provenance', '--fetch-retries=0']);
+        npm(['publish', archive, '--access', 'public', '--registry', registry, '--ignore-scripts', '--provenance', '--tag', 'latest', '--fetch-retries=0']);
         await checkRegistry(manifest.version, manifest.integrity);
         const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'nstdata-public-install-'));
         try {
             fs.writeFileSync(path.join(temp, 'package.json'), '{"private":true}');
-            npm(['install', `${name}@${manifest.version}`, '--registry', registry, '--ignore-scripts', '--no-audit', '--no-fund', '--cache', path.join(temp, 'cache')], temp);
+            npm(['install', name, '--registry', registry, '--ignore-scripts', '--no-audit', '--no-fund', '--cache', path.join(temp, 'cache')], temp);
             assert.equal(readJson(path.join(temp, 'node_modules', name, 'package.json')).version, manifest.version);
             execFileSync(process.execPath, ['-e', `const assert=require('node:assert/strict');assert.equal(typeof require('${name}').NstDataClient,'function');import('${name}').then(m=>assert.equal(typeof m.NstDataClient,'function'));`], { cwd: temp, timeout: 10000 });
         } finally { fs.rmSync(temp, { recursive: true, force: true }); }

@@ -8,7 +8,9 @@ Retrieve webpages as Markdown, HTML, links, PDF, screenshots or raw data from No
 
 Requires Node.js 22.18+ in the 22.x line, or Node.js 24.
 
-Version 2.0.0 is not published on npm yet. To use this source version, follow the [local installation steps](CONTRIBUTING.md#local-package-installation).
+```sh
+npm install @nstdata-ai/crawl
+```
 
 Upgrading from 1.x? Read the [breaking changes](CHANGELOG.md#compatibility).
 
