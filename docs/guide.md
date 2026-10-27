@@ -1,152 +1,368 @@
 # Crawl SDK usage guide
 
-[Back to quick start](../README.md) · [中文](guide_zh.md)
+[Quick start](../README.md) · [中文](guide_zh.md)
 
-[Async scraping](#async-scraping) · [Site crawling](#site-crawling) · [Scrape options](#scrape-options) · [Content and results](#content-and-results) · [Request controls and errors](#request-controls-and-errors) · [Method reference](#method-reference)
+[Asynchronous pages](#asynchronous-pages) · [Site crawling](#site-crawling) · [JavaScript rendering](#javascript-rendering) · [Content formats](#content-formats) · [Reference](#reference)
 
-## Choose an execution mode
+## Set up the examples
 
-| Mode | Use when | Sequence |
-|---|---|---|
-| Synchronous page | You need one page in the current call | `submitScrapeTaskSync` → check result → read content |
-| Asynchronous page | You need to save and resume a task | `submitScrapeTask` → save ID → `getScrapeTaskResult` |
-| Site crawl | You need discovered internal pages | `submitCrawlTask` → save ID → `getCrawlStatus` → `listCrawlPages` |
+Install the SDK as described in the [README](../README.md#install), reuse the local `.env` file from the quick start, then save the shared client below as `client.mts`. Save each following program in the same application directory and run it with `node --env-file=.env <filename>.mts`. No TypeScript runner or module-type change is required.
 
-Creation is never retried automatically. Preserve a known ID after an uncertain submission. Local timeout/cancellation does not cancel the remote task. A synchronous result ID does not guarantee it can be queried again.
+The request examples submit real tasks and can consume credits. Use your own authorized target. `example.com` is a single-page illustration, not a demonstration of a ten-page crawl.
 
-## Async scraping
-
-**Purpose:** submit a page, save its task ID and query the result later. `processing`/`scraping` mean running; inspect `success` and `data` after `completed`. Stop on `failed`/`expired`.
-
-**Returns:** submission yields `SubmitResponseDto`; queries yield `TaskResultResponseDto`. This complete example submits once, prints the ID first and makes at most 20 queries, with a two-minute overall deadline and a 1 MiB response cap.
+`client.mts`
 
 ```typescript
-import { setTimeout as delay } from 'node:timers/promises';
-import { NstDataClient, Format, TaskStatus, TaskResultResponseDto, ScrapeDataDto } from '@nstdata-ai/crawl';
+import { NstDataClient, NstDataApiError } from '@nstdata-ai/crawl';
 
-function resultData(res: TaskResultResponseDto): ScrapeDataDto {
-    if (res.success === false || res.status === TaskStatus.FAILED || res.status === TaskStatus.EXPIRED) {
-        throw new Error('Scrape task failed');
+const token = process.env.NSTDATA_API_TOKEN;
+if (!token?.trim()) throw new Error('Set NSTDATA_API_TOKEN in your environment.');
+export const client = new NstDataClient(token);
+
+export function reportError(error: unknown): void {
+    if (error instanceof NstDataApiError) {
+        console.error('API request failed', { statusCode: error.statusCode, code: error.code });
+    } else if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)) {
+        console.error(`${error.name}: local waiting stopped; keep the existing task ID.`);
+    } else {
+        console.error('Transport or response decoding failed.');
     }
-    if (res.status !== TaskStatus.COMPLETED || !res.data) throw new Error('No completed scrape data returned');
-    return res.data;
+    process.exitCode = 1;
 }
+```
 
+The shared error handler prints API status/code or a fixed local failure category. It deliberately omits API messages, response bodies and custom abort reasons, which may contain private data.
 
-async function exampleAsyncPolling(client: NstDataClient, signal = AbortSignal.timeout(120000)) {
-    signal.throwIfAborted();
-    const options = { signal, maxResponseBytes: 1048576 };
-    const submitted = await client.submitScrapeTask({
-        url: 'https://example.com/', formats: [Format.MARKDOWN], timeout: 60000,
-    }, options);
-    if (!submitted.id) throw new Error('Submission returned no task ID');
-    // Retain this ID if local waiting stops; do not submit the task again.
-    console.log('task id:', submitted.id);
-    for (let poll = 0; poll < 20; poll++) {
-        signal.throwIfAborted();
-        const res = await client.getScrapeTaskResult(submitted.id, options);
-        if (res.success === false || res.status === TaskStatus.FAILED || res.status === TaskStatus.EXPIRED) {
-            throw new Error('Scrape task failed');
-        }
-        if (res.status === TaskStatus.COMPLETED) {
-            const markdown = await resultData(res).getMarkdown();
-            if (markdown === undefined) throw new Error('No Markdown content returned');
-            console.log(markdown);
-            return;
-        }
-        if (res.status !== TaskStatus.PROCESSING && res.status !== TaskStatus.SCRAPING) throw new Error('Unexpected scrape status');
-        if (poll < 19) await delay(3000, undefined, { signal });
-    }
-    throw new Error('Scrape polling limit reached; retain the existing task ID');
-}
+## Asynchronous pages
 
+### Submit once
+
+This creates one single-page task and prints its ID. Save that ID before querying. An uncertain submission must not be repeated automatically.
+
+`submit-async.mts`
+
+```typescript
+import { Format } from '@nstdata-ai/crawl';
+import { client, reportError } from './client.mts';
 
 async function main() {
-    const token = process.env.NSTDATA_API_TOKEN;
-    if (!token?.trim()) throw new Error('Set NSTDATA_API_TOKEN');
-    await exampleAsyncPolling(new NstDataClient(token));
+    const task = await client.submitScrapeTask({
+        url: 'https://example.com/',
+        formats: [Format.MARKDOWN],
+    });
+    if (!task.id?.trim()) {
+        console.error('The submission returned no task ID.');
+        process.exitCode = 1;
+        return;
+    }
+    console.log(task.id);
 }
-main().catch(() => {
-    console.error('Workflow stopped; preserve any printed task ID.');
-    process.exitCode = 1;
-});
+main().catch(reportError);
+```
+
+```sh
+node --env-file=.env submit-async.mts
+```
+
+### Read an existing task
+
+Add `NSTDATA_TASK_ID` with the saved ID to `.env`. This program queries once and reads Markdown only when the task has completed. If it is still running, query the same ID later; do not submit another task.
+
+`read-async.mts`
+
+```typescript
+import { client, reportError } from './client.mts';
+
+const taskId = process.env.NSTDATA_TASK_ID;
+if (!taskId) throw new Error('Set NSTDATA_TASK_ID to the existing task ID.');
+
+async function main(taskId: string) {
+    const result = await client.getScrapeTaskResult(taskId);
+    if (result.success === false || result.status === 'failed' || result.status === 'expired') {
+        console.error('The scrape task failed.');
+        process.exitCode = 1;
+        return;
+    }
+    if (result.status === 'processing' || result.status === 'scraping') {
+        console.log('The task is still running. Query the same task ID later.');
+        return;
+    }
+    if (result.status !== 'completed' || !result.data) {
+        console.error('No completed scrape data was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    const markdown = await result.data.getMarkdown();
+    if (markdown === undefined) {
+        console.error('No Markdown content was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    console.log(markdown);
+}
+main(taskId).catch(reportError);
+```
+
+```sh
+node --env-file=.env read-async.mts
 ```
 
 ## Site crawling
 
-**Purpose:** discover internal pages from `url`, bounded by `maxPages`, `maxDepth` and URL filters. This is link discovery, not a batch queue over a supplied URL list; a page cap does not guarantee a collected count.
+### Start a bounded crawl
 
-**Returns:** status exposes `total/completed/failed/pending`. Lists expose `data`, `nextCursor` and `prevCursor`. Check each row's `status/success` before reading content: a finished site task can contain failed pages.
+A crawl discovers linked pages from one entry URL. `maxPages` is an upper bound, not a requested result count; it is not a batch queue of supplied URLs. Keep `onlyMainContent: false` when navigation links must remain available for discovery.
 
-This complete example submits once, makes at most 20 status queries and reads at most 100 batches, using actual cursors and rejecting repeats. Its ten-page cap does not guarantee ten discovered pages. Replace the target with a site you are authorized to crawl.
+`start-crawl.mts`
 
 ```typescript
-import { setTimeout as delay } from 'node:timers/promises';
-import { NstDataClient, Format, TaskStatus, TaskResultResponseDto, ScrapeDataDto } from '@nstdata-ai/crawl';
-
-async function exampleCrawl(client: NstDataClient, signal = AbortSignal.timeout(120000)) {
-    signal.throwIfAborted();
-    const options = { signal, maxResponseBytes: 1048576 };
-    const submitted = await client.submitCrawlTask({
-        url: 'https://example.com/', maxDepth: 1, maxPages: 10,
-        formats: [Format.MARKDOWN], onlyMainContent: true, timeout: 60000,
-    }, options);
-    if (!submitted.id) throw new Error('Submission returned no crawl ID');
-    console.log('crawl task id:', submitted.id);
-    for (let poll = 0; ; poll++) {
-        signal.throwIfAborted();
-        const status = await client.getCrawlStatus(submitted.id, options);
-        if (status.status === TaskStatus.FAILED || status.status === TaskStatus.EXPIRED) throw new Error(`Crawl task ${status.status}`);
-        if (status.status === TaskStatus.COMPLETED) {
-            if (status.failed && status.failed > 0) throw new Error('Crawl contains failed pages');
-            break;
-        }
-        if (status.status !== TaskStatus.PROCESSING && status.status !== TaskStatus.SCRAPING) throw new Error('Unexpected crawl status');
-        if (poll === 19) throw new Error('Crawl polling limit reached; retain the existing crawl ID');
-        await delay(3000, undefined, { signal });
-    }
-    let cursor: string | undefined;
-    const cursors = new Set<string>();
-    for (let batch = 0; batch < 100; batch++) {
-        signal.throwIfAborted();
-        const pages = await client.listCrawlPages(submitted.id, { afterCursor: cursor, limit: 20 }, options);
-        for (const page of pages.data ?? []) {
-            if (page.success === false || page.status === TaskStatus.FAILED || page.status === TaskStatus.EXPIRED) throw new Error('Crawl page failed');
-            if (page.status !== TaskStatus.COMPLETED) throw new Error('No completed crawl page returned');
-            const markdown = await page.data?.getMarkdown();
-            if (markdown === undefined) throw new Error('No Markdown content returned for crawl page');
-            console.log(page.url, markdown);
-        }
-        if (!pages.nextCursor) return;
-        if (cursors.has(pages.nextCursor)) throw new Error('Repeated pagination cursor');
-        cursors.add(pages.nextCursor);
-        cursor = pages.nextCursor;
-    }
-    throw new Error('Crawl pagination limit reached; retain the existing crawl ID and cursor');
-}
-
+import { Format } from '@nstdata-ai/crawl';
+import { client, reportError } from './client.mts';
 
 async function main() {
-    const token = process.env.NSTDATA_API_TOKEN;
-    if (!token?.trim()) throw new Error('Set NSTDATA_API_TOKEN');
-    await exampleCrawl(new NstDataClient(token));
+    const task = await client.submitCrawlTask({
+        url: 'https://example.com/',
+        formats: [Format.MARKDOWN],
+        maxDepth: 1,
+        maxPages: 10,
+        onlyMainContent: false,
+    });
+    if (!task.id?.trim()) {
+        console.error('The submission returned no crawl ID.');
+        process.exitCode = 1;
+        return;
+    }
+    console.log(task.id);
 }
-main().catch(() => {
-    console.error('Workflow stopped; preserve any printed task ID.');
-    process.exitCode = 1;
-});
+main().catch(reportError);
 ```
 
-Use one pagination direction: pass the previous `nextCursor` unchanged as `afterCursor`, or `prevCursor` as `beforeCursor`. `limit` sizes a list response; it is separate from the site's `maxPages`. Preserve the crawl ID and cursor to continue without another submission.
+```sh
+node --env-file=.env start-crawl.mts
+```
 
-## Scrape options
+### Read crawl pages
+
+Add `NSTDATA_CRAWL_ID` with the saved crawl ID to `.env`. The following program checks status once, then reads one result batch. Only `completed` allows reading; a completed crawl may still contain failed page results, so each row is checked separately.
+
+`read-pages.mts`
+
+```typescript
+import { client, reportError } from './client.mts';
+
+const crawlId = process.env.NSTDATA_CRAWL_ID;
+if (!crawlId) throw new Error('Set NSTDATA_CRAWL_ID to the existing crawl ID.');
+const afterCursor = process.env.NSTDATA_AFTER_CURSOR || undefined;
+
+async function main(crawlId: string) {
+    const status = await client.getCrawlStatus(crawlId);
+    if (status.status === 'failed' || status.status === 'expired') {
+        console.error('The crawl task failed.');
+        process.exitCode = 1;
+        return;
+    }
+    if (status.status === 'processing' || status.status === 'scraping') {
+        console.log('The crawl is still running. Check the same ID later.');
+        return;
+    }
+    if (status.status !== 'completed') {
+        console.error('No completed crawl status was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    const pages = await client.listCrawlPages(crawlId, { afterCursor, limit: 20 });
+    if (pages.nextCursor && pages.nextCursor === afterCursor) {
+        console.error('The pagination cursor did not advance. Keep the current state.');
+        process.exitCode = 1;
+        return;
+    }
+    if (!afterCursor && Math.max(pages.total ?? 0, status.completed ?? status.total ?? 0) > 0
+        && !pages.data?.length && !pages.nextCursor) {
+        console.error('No pages were returned for a nonempty completed crawl.');
+        process.exitCode = 1;
+        return;
+    }
+    for (const page of pages.data ?? []) {
+        if (page.success === false || page.status !== 'completed' || !page.data) {
+            console.error('A page has no successful completed result.');
+            process.exitCode = 1;
+            return;
+        }
+        const markdown = await page.data.getMarkdown();
+        if (markdown === undefined) {
+            console.error('A page has no Markdown content.');
+            process.exitCode = 1;
+            return;
+        }
+        console.log(page.url ?? '(page URL unavailable)', markdown);
+    }
+    console.error(JSON.stringify({ crawlId, afterCursor: pages.nextCursor ?? null }));
+}
+main(crawlId).catch(reportError);
+```
+
+```sh
+node --env-file=.env read-pages.mts
+```
+
+The final stderr line contains the recovery state. If `afterCursor` is a string, preserve its exact value as `NSTDATA_AFTER_CURSOR` and run the same program to read the next batch. `null` means no next cursor was returned; stop instead of restarting at the first batch. Keep the current ID/cursor if a read fails. Re-reading a partly consumed batch can repeat output, so deduplicate saved pages by URL or task ID.
+
+Use only one direction: `nextCursor` → `afterCursor`, or `prevCursor` → `beforeCursor`. `limit` controls the result-batch size; it does not change the crawl's `maxPages`.
+
+For an automatic bounded workflow, see the repository's [complete example](https://github.com/nstdata-ai/crawl-node/blob/main/example.ts). `exampleAsyncPolling(client, signal, state)` and `exampleCrawl(client, signal, state)` update the supplied state with an accepted task ID and the last consumed cursor. Pass that same state to resume; `afterCursor: null` marks finished pagination and prevents another read. They stop after at most 20 status queries and 100 page batches; their default overall deadline is two minutes. Local cancellation does not cancel a remote task.
+
+## JavaScript rendering
+
+`jsRender` waits for dynamic content and runs browser actions before extraction. `ActionBuilder` creates the corresponding action objects; constructing an action does not send a request. This example waits for a heading, scrolls and pauses before retrieving Markdown.
+
+`render.mts`
+
+```typescript
+import { ActionBuilder, Format } from '@nstdata-ai/crawl';
+import { client, reportError } from './client.mts';
+
+async function main() {
+    const result = await client.submitScrapeTaskSync({
+        url: 'https://example.com/',
+        formats: [Format.MARKDOWN],
+        jsRender: {
+            waitForSelector: 'h1',
+            actions: [ActionBuilder.scrollY(400), ActionBuilder.wait(1000)],
+        },
+    });
+    if (result.success === false || result.status !== 'completed' || !result.data) {
+        console.error('No successful completed scrape was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    const markdown = await result.data.getMarkdown();
+    if (markdown === undefined) {
+        console.error('No Markdown content was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    console.log(markdown);
+}
+main().catch(reportError);
+```
+
+```sh
+node --env-file=.env render.mts
+```
+
+Select page-specific elements and waits for your target. Available actions include `click`, `fill`, `wait`, `waitSelector`, `scrollX`, `scrollY`, `scrollTo`, `executeJs`, `screenshot` and `waitForRequest`. Network-wait patterns are interpreted by the service.
+
+## Content formats
+
+Request formats through `formats`, then read them from the successful result's `data`. This example saves HTML and PDF from one task to new files in the application directory; it does not overwrite existing files.
+
+`formats.mts`
+
+```typescript
+import { writeFile } from 'node:fs/promises';
+import { Format } from '@nstdata-ai/crawl';
+import { client, reportError } from './client.mts';
+
+async function main() {
+    const result = await client.submitScrapeTaskSync({
+        url: 'https://example.com/',
+        formats: [Format.HTML, Format.PDF],
+    });
+    if (result.success === false || result.status !== 'completed' || !result.data) {
+        console.error('No successful completed scrape was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    const html = await result.data.getHtml();
+    const pdf = await result.data.getPdf();
+    if (html === undefined || pdf === undefined) {
+        console.error('One or more requested formats were not returned.');
+        process.exitCode = 1;
+        return;
+    }
+    try {
+        await writeFile('page.html', html, { flag: 'wx' });
+        await writeFile('page.pdf', pdf, { flag: 'wx' });
+    } catch {
+        console.error('Could not save output. Check permissions and existing page.html/page.pdf files.');
+        process.exitCode = 1;
+        return;
+    }
+    console.log('Saved page.html and page.pdf');
+}
+main().catch(reportError);
+```
+
+```sh
+node --env-file=.env formats.mts
+```
+
+| Format | Read with | Result |
+|---|---|---|
+| `Format.MARKDOWN` | `await data.getMarkdown()` | `string` or `undefined` |
+| `Format.HTML` | `await data.getHtml()` | `string` or `undefined` |
+| `Format.LINKS` | `data.links` | `string[]` or `undefined` |
+| `Format.PDF` | `await data.getPdf()` | `Buffer` or `undefined` |
+| `Format.SCREENSHOT` | `await data.getScreenshot()` | `Buffer` or `undefined` |
+| `Format.RAW_DATA` | `await data.getRawData()` | `Buffer` or `undefined` |
+
+Getters prefer inline content; otherwise they download the corresponding opaque reference. Do not decode references or construct storage URLs. Successful reads are cached, including empty content; failed reads are not. Empty strings or buffers are valid, whereas `undefined` means absent. Raw data is bytes, not structured JSON extraction.
+
+`metadata` contains available title, description, language, canonical URL, OpenGraph image and target status code. `truncated: true` indicates service truncation; an absent flag does not prove completeness. Optional response content and list `data` may be `null` or absent, so check the result before reading.
+
+## Request controls and errors
+
+This example reads one existing task with a ten-second local deadline and a 1 MiB response limit. It does not create a task.
+
+`controls.mts`
+
+```typescript
+import { client, reportError } from './client.mts';
+
+const taskId = process.env.NSTDATA_TASK_ID;
+if (!taskId) throw new Error('Set NSTDATA_TASK_ID to the existing task ID.');
+
+async function main(taskId: string) {
+    const result = await client.getScrapeTaskResult(taskId, {
+        signal: AbortSignal.timeout(10000),
+        maxResponseBytes: 1048576,
+    });
+    console.log({
+        completed: result.status === 'completed',
+        failed: result.success === false
+            || result.status === 'failed'
+            || result.status === 'expired',
+    });
+}
+main(taskId).catch(reportError);
+```
+
+```sh
+node --env-file=.env controls.mts
+```
+
+A local deadline or `AbortSignal` stops waiting, not the remote task. Preserve the existing ID. No request is automatically retried. A synchronous result's ID does not guarantee that it can be queried again.
+
+| Failure | Meaning | Next action |
+|---|---|---|
+| `NstDataApiError` | HTTP, API or response-validation failure | Use `statusCode` and `code`; check credentials, quota or request fields |
+| `TimeoutError` / `AbortError` | Local waiting stopped | Resume the known task; do not automatically resubmit |
+| Result `failed` / `expired`, or `success: false` | Remote task failure | Inspect task error fields privately; do not consume as successful content |
+| Completed result without requested content | Format absent or result incomplete | Check requested formats and result fields |
+| `TypeError` reading HTML/Markdown | Invalid stored UTF-8 or a transport failure | Retain the task and investigate; do not treat it as empty content |
+
+Avoid logging complete errors or task error messages: they can include private target content. The shared handler above limits public output to failure categories and API codes.
+
+## Reference
+
+### Request fields
 
 All three modes require `url` and a nonempty `formats`. Other scrape fields are optional; omitted server settings use service defaults.
 
 | Field | Type | Purpose and constraints |
 |---|---|---|
 | `url` | `string` | Page URL or site entry |
-| `formats` | `string[]` | At least one format from the table below |
+| `formats` | `string[]` | At least one output format |
 | `onlyMainContent` | `boolean` | Extract primary content; may affect retained content and discoverable links |
 | `targetSelector` | `string` | Restrict extraction to a CSS-selected area |
 | `removeSelectors` | `string[]` | Remove matching areas, such as ads or popups |
@@ -171,49 +387,6 @@ Additional site-only fields:
 
 The service interprets filter syntax and starting depth; different entries need not discover the same pages.
 
-### JavaScript actions
-
-`ActionBuilder` creates objects for `jsRender.actions`; constructing them sends no request.
-
-| Helper | Purpose |
-|---|---|
-| `click(selector)` / `fill(selector, text)` | Click or fill an element |
-| `wait(milliseconds)` / `waitSelector(selector, timeoutMs?)` | Fixed wait or element wait |
-| `scrollX(pixels)` / `scrollY(pixels)` / `scrollTo(selector)` | Scroll by pixels or to an element |
-| `executeJs(script)` | Execute page JavaScript |
-| `screenshot(full?, selector?)` | Build a full-page, element or viewport screenshot action |
-| `waitForRequest(urlPattern, timeoutMs?)` | Wait for matching network activity; service interprets the pattern |
-
-## Content and results
-
-`TaskResultResponseDto` exposes `status/success/errorCode/errorMessage`; content is in `data: ScrapeDataDto`. Site rows also expose `url/taskId`. Response fields are optional: inspect what is actually returned.
-
-| Returned object | Key fields | Usage |
-|---|---|---|
-| `SubmitResponseDto` | `id`, `status`, `cached`, `code` | Preserve the actual ID; `cached` is a service cache flag, not content |
-| `TaskResultResponseDto` | `status`, `success`, `data`, `errorCode`, `errorMessage`, `id`, `code` | Check completion/failure before consuming `data` |
-| `CrawlStatusResponseDto` | `status`, `total`, `completed`, `failed`, `pending`, `id`, `code` | Aggregate progress, without per-page content |
-| `CrawlPageListResponseDto` | `data`, `nextCursor`, `prevCursor`, `total`, `completed`, `code` | Follow actual cursors; check each returned row separately |
-
-### Output formats
-
-| Format / constant | Read with | Result type |
-|---|---|---|
-| `markdown` / `Format.MARKDOWN` | `await data.getMarkdown()` | `string` or `undefined` |
-| `html` / `Format.HTML` | `await data.getHtml()` | `string` or `undefined` |
-| `links` / `Format.LINKS` | `data.links` | `string[]` or `undefined` |
-| `pdf` / `Format.PDF` | `await data.getPdf()` | `Buffer` or `undefined` |
-| `screenshot` / `Format.SCREENSHOT` | `await data.getScreenshot()` | `Buffer` or `undefined` |
-| `rawData` / `Format.RAW_DATA` | `await data.getRawData()` | `Buffer` or `undefined`, not schema extraction |
-
-- Getters prefer inline content, otherwise downloading the corresponding `*Ref`. References are opaque; do not decode them, construct URLs or log their values.
-- Empty strings/arrays are valid; `undefined` means absent. Inline PDF/screenshots decode Base64; raw text becomes UTF-8 bytes.
-- Getters inherit request controls and accept `RequestOptions` overrides. Successful reads, including empty content, are cached; failed reads are not.
-- `metadata` exposes available `title/description/language/canonical/ogImage/statusCode` and preserves unknown fields. `truncated: true` signals service truncation; an absent flag does not prove completeness.
-- `getHtml/getMarkdown` throw `TypeError` for malformed UTF-8 references. `readStorage(ref)` returns raw `ArrayBuffer`; getters are normally sufficient.
-
-## Request controls and errors
-
 ### Where options go
 
 | Location | Options | Defaults or behavior |
@@ -222,24 +395,11 @@ The service interprets filter syntax and starting depth; different entries need 
 | Final method argument | `signal`, `timeoutMs`, `maxResponseBytes` | Per HTTP operation; third argument for `listCrawlPages` |
 | Content getter argument | Same controls | Overrides the content read; otherwise inherits the originating request |
 
-`timeoutMs` is an integer 1–2147483647 milliseconds covering one HTTP operation and body read. `maxResponseBytes` is a positive safe integer; omission means no size cap. Examples explicitly cap responses at 1 MiB. A `signal` stops local waiting, not the remote task.
+`timeoutMs` is an integer 1–2147483647 milliseconds covering one HTTP operation and body read. `maxResponseBytes` is a positive safe integer; omission means no size cap. The controls example explicitly caps responses at 1 MiB. A `signal` stops local waiting, not the remote task.
 
 `baseURL` accepts HTTP(S) without credentials, query or fragment, preserving an optional path prefix. API/storage redirects are refused and requests are not automatically retried. Injected `fetch` must honor `redirect: 'manual'` and `AbortSignal`.
 
-### Recognizing failures
-
-| Observation | Meaning | Response |
-|---|---|---|
-| `NstDataApiError` with `statusCode` | HTTP response status; also present on some API/validation errors | Combine with `code` and the safe message; HTTP200 does not prove task success |
-| `NstDataApiError` with `code` | API business error | Investigate the code; do not resubmit automatically |
-| `NstDataApiError` without business code | Can be response validation or size limit | Inspect the safe message and configured limit |
-| `TimeoutError` / `AbortError` | Local deadline or standard cancellation | Preserve task ID; custom abort reasons are thrown unchanged |
-| Returned `failed/expired` or `success: false` | Remote task failure | Inspect task error fields; do not consume as successful content |
-| Completed result lacks `data`, or getter yields `undefined` | Requested content absent | Check formats and result fields; do not treat as empty content |
-
-Other transport errors retain their type; invalid configuration can fail before sending. SDK errors omit HTTP bodies/parser excerpts and redact the configured token in envelope messages. Task errors and page content may still be sensitive: avoid logging complete responses.
-
-## Method reference
+### Methods
 
 Methods return the inner API payload; callers do not unwrap the HTTP envelope.
 

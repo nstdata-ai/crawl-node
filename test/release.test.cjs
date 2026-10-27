@@ -11,7 +11,8 @@ const env = { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'nstdat
     GITHUB_SHA: commit, RELEASE_COMMIT: commit, RELEASE_VERSION: '2.0.0', GH_TOKEN: 'fixture-token' };
 const pkg = { name: '@nstdata-ai/crawl', version: '2.0.0', repository: { url: 'git+https://github.com/nstdata-ai/crawl-node.git' } };
 const response = (data, status = 200) => ({ status, json: async () => data });
-const environment = { protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User' }] }],
+const environment = { can_admins_bypass: false,
+    protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User' }] }],
     deployment_branch_policy: { custom_branch_policies: true, protected_branches: false } };
 const policies = { total_count: 1, branch_policies: [{ name: 'main', type: 'branch' }] };
 
@@ -37,9 +38,13 @@ test('release environment requires configured reviewers and only the main branch
     });
     assert.equal(calls.length, 2);
     assert.ok(calls[1].endsWith('/deployment-branch-policies?per_page=100'));
-    for (const invalid of [{}, { ...environment, protection_rules: [] }, { ...environment, protection_rules: [{ type: 'required_reviewers', reviewers: [] }] },
+    for (const invalid of [{}, { ...environment, can_admins_bypass: true },
+        { ...environment, can_admins_bypass: undefined },
+        { ...environment, protection_rules: [] }, { ...environment, protection_rules: [{ type: 'required_reviewers', reviewers: [] }] },
         { ...environment, deployment_branch_policy: { protected_branches: true } }]) {
-        await assert.rejects(checkEnvironment(env, async () => response(invalid)));
+        await assert.rejects(checkEnvironment(env, async url => response(
+            url.includes('/deployment-branch-policies?') ? policies : invalid,
+        )));
     }
     for (const invalid of [{ total_count: 2, branch_policies: policies.branch_policies },
         { total_count: 1, branch_policies: [{ name: '*', type: 'branch' }] },

@@ -463,3 +463,267 @@ test('normalizes null content fields and preserves empty links, metadata and unf
     assert.equal(await empty.getMarkdown(), ''); assert.deepEqual(empty.links, []);
     assert.deepEqual(empty.metadata, { title: '', statusCode: 200, extra: { preserved: true } });
 });
+
+test('normalizes header whitespace before sending and redacting the API token', async () => {
+    const token = 'synthetic-header-token';
+    let sent;
+    const client = new NstDataClient(` \t${token}\t `, {
+        fetch: async (_url, init) => {
+            sent = new Headers(init.headers).get('x-api-key');
+            return Response.json({ code: 403, err: true, msg: `denied ${sent}` });
+        },
+    });
+    await assert.rejects(client.getCrawlStatus('known'), error => {
+        assert.ok(error instanceof NstDataApiError);
+        assert.doesNotMatch(error.message, new RegExp(token));
+        assert.match(error.message, /<REDACTED>/);
+        return true;
+    });
+    assert.equal(sent, token);
+});
+
+test('rejects invalid token header values without including the credential in errors', () => {
+    for (const token of ['synthetic\nprivate-token', 'synthetic\0private-token', 'synthetic-雪-token']) {
+        assert.throws(() => new NstDataClient(token), error => {
+            assert.match(error.message, /token/i);
+            assert.doesNotMatch(error.message, /synthetic|private|雪/);
+            return true;
+        });
+    }
+});
+
+test('validates known submission and task fields while preserving optional and future fields', async () => {
+    const submissions = [
+        client => client.submitScrapeTask({ url: 'https://example.com', formats: ['markdown'] }),
+        client => client.submitCrawlTask({ url: 'https://example.com', formats: ['markdown'] }),
+    ];
+    for (const run of submissions) {
+        for (const data of [{ id: 42 }, { status: true }, { cached: 'false' }, { code: '0' }]) {
+            const client = new NstDataClient('fixture-token', { fetch: async () => envelope(data) });
+            await assert.rejects(run(client), NstDataApiError);
+        }
+        const valid = new NstDataClient('fixture-token', {
+            fetch: async () => envelope({ id: null, status: 'future-state', cached: false, code: 0, future: { keep: true } }),
+        });
+        assert.deepEqual(await run(valid), {
+            id: undefined, status: 'future-state', cached: false, code: 0, future: { keep: true },
+        });
+    }
+    const operations = [
+        client => client.submitScrapeTaskSync({ url: 'https://example.com', formats: ['markdown'] }),
+        client => client.getScrapeTaskResult('known'),
+        async client => (await client.listCrawlPages('known')).data[0],
+    ];
+    for (const run of operations) {
+        for (const item of [
+            { success: 'false' }, { status: 42 }, { errorCode: {} }, { errorMessage: false },
+        ]) {
+            const client = new NstDataClient('fixture-token', {
+                fetch: async url => envelope(url.includes('/pages') ? { data: [item] } : item),
+            });
+            await assert.rejects(run(client), NstDataApiError);
+        }
+        const item = { success: false, status: 'future-state', errorCode: 'known', errorMessage: null, future: 'preserved' };
+        const client = new NstDataClient('fixture-token', {
+            fetch: async url => envelope(url.includes('/pages') ? { data: [item] } : item),
+        });
+        assert.deepEqual(await run(client), { ...item, errorMessage: undefined });
+    }
+    for (const run of operations.slice(0, 2)) {
+        for (const item of [{ id: [] }, { code: false }]) {
+            const client = new NstDataClient('fixture-token', { fetch: async () => envelope(item) });
+            await assert.rejects(run(client), NstDataApiError);
+        }
+    }
+    for (const item of [{ taskId: 42 }, { url: {} }]) {
+        const client = new NstDataClient('fixture-token', { fetch: async () => envelope({ data: [item] }) });
+        await assert.rejects(client.listCrawlPages('known'), NstDataApiError);
+    }
+    const extendedPage = {
+        taskId: 'known-page', id: 42, code: 'future-page-code', data: { markdown: '' },
+    };
+    const extendedClient = new NstDataClient('fixture-token', {
+        fetch: async () => envelope({ data: [extendedPage] }),
+    });
+    const page = (await extendedClient.listCrawlPages('known')).data[0];
+    assert.equal(page.id, 42);
+    assert.equal(page.code, 'future-page-code');
+    assert.equal(await page.data.getMarkdown(), '');
+});
+
+test('rejects malformed crawl counts and cursors without rejecting empty or extended results', async () => {
+    for (const value of [-1, 1.5, '2', true, {}, 9007199254740992]) {
+        for (const field of ['total', 'completed', 'failed', 'pending']) {
+            const client = new NstDataClient('fixture-token', { fetch: async () => envelope({ [field]: value }) });
+            await assert.rejects(client.getCrawlStatus('known'), NstDataApiError);
+        }
+        for (const field of ['total', 'completed']) {
+            const client = new NstDataClient('fixture-token', { fetch: async () => envelope({ [field]: value, data: [] }) });
+            await assert.rejects(client.listCrawlPages('known'), NstDataApiError);
+        }
+    }
+    for (const field of ['nextCursor', 'prevCursor']) {
+        const client = new NstDataClient('fixture-token', { fetch: async () => envelope({ [field]: {}, data: [] }) });
+        await assert.rejects(client.listCrawlPages('known'), NstDataApiError);
+    }
+    const overflow = new NstDataClient('fixture-token', {
+        fetch: async () => new Response('{"code":200,"err":false,"data":{"total":1e309}}'),
+    });
+    await assert.rejects(overflow.getCrawlStatus('known'), NstDataApiError);
+    const valid = new NstDataClient('fixture-token', {
+        fetch: async () => envelope({ total: 0, completed: 0, failed: null, nextCursor: null, data: [], extra: true }),
+    });
+    const status = await valid.getCrawlStatus('known');
+    assert.equal(status.failed, undefined);
+    assert.equal(status.extra, true);
+    const page = await valid.listCrawlPages('known');
+    assert.deepEqual(page.data, []);
+    assert.equal(page.nextCursor, undefined);
+});
+
+test('normalizes nullable known metadata fields without removing unknown metadata', async () => {
+    const metadata = { title: null, canonical: null, description: null, language: null, ogImage: null,
+        statusCode: null, custom: { value: null } };
+    const client = new NstDataClient('fixture-token', { fetch: async () => envelope({ data: { metadata } }) });
+    const normalized = (await client.getScrapeTaskResult('known')).data.metadata;
+    for (const field of ['title', 'canonical', 'description', 'language', 'ogImage', 'statusCode']) {
+        assert.equal(normalized[field], undefined);
+    }
+    assert.deepEqual(normalized.custom, { value: null });
+});
+
+test('rejects base URLs with empty query or fragment delimiters', async () => {
+    for (const baseURL of ['https://fixture.invalid/?', 'https://fixture.invalid/#', 'https://fixture.invalid/path?#']) {
+        assert.throws(() => new NstDataClient('fixture-token', { baseURL }), /baseURL/);
+    }
+    const calls = [];
+    const client = new NstDataClient('fixture-token', {
+        baseURL: 'https://fixture.invalid/prefix/',
+        fetch: async url => { calls.push(url); return envelope({}); },
+    });
+    await client.getCrawlStatus('known');
+    assert.equal(calls[0], 'https://fixture.invalid/prefix/api/v1/crawl/known');
+});
+
+test('invalid base URL errors never retain credential-bearing input', () => {
+    for (const baseURL of ['https://synthetic-user:synthetic-secret@[', 'http://\u0000invalid']) {
+        assert.throws(() => new NstDataClient('fixture-token', { baseURL }), error => {
+            assert.match(error.message, /baseURL/);
+            assert.equal(Object.hasOwn(error, 'input'), false);
+            assert.doesNotMatch(JSON.stringify(error), /synthetic|secret|invalid/);
+            return true;
+        });
+    }
+});
+
+test('rejects empty or dot-segment task IDs before dispatch while retaining opaque IDs', async () => {
+    let calls = 0;
+    const client = new NstDataClient('fixture-token', {
+        fetch: async () => { calls++; return envelope({}); },
+    });
+    for (const id of ['', ' ', '.', '..', null, undefined, 42]) {
+        await assert.rejects(client.getScrapeTaskResult(id), /ID/);
+        await assert.rejects(client.getCrawlStatus(id), /ID/);
+        await assert.rejects(client.listCrawlPages(id), /ID/);
+    }
+    assert.equal(calls, 0);
+    await client.getScrapeTaskResult('opaque /?&');
+    assert.equal(calls, 1);
+});
+
+test('rejects invalid page sizes, cursor types and conflicting directions before dispatch', async () => {
+    let calls = 0;
+    const client = new NstDataClient('fixture-token', {
+        fetch: async () => { calls++; return envelope({ data: [] }); },
+    });
+    for (const limit of [0, -1, NaN, Infinity, 1.5, '1', 9007199254740992]) {
+        await assert.rejects(client.listCrawlPages('known', { limit }), /limit/);
+    }
+    for (const opts of [{ afterCursor: {} }, { beforeCursor: 1 }, { afterCursor: 'a', beforeCursor: 'b' }]) {
+        await assert.rejects(client.listCrawlPages('known', opts), /cursor/i);
+    }
+    assert.equal(calls, 0);
+    await client.listCrawlPages('known', { afterCursor: '', limit: 1 });
+    await client.listCrawlPages('known', { beforeCursor: 'opaque /?&', limit: 1 });
+    assert.equal(calls, 2);
+});
+
+test('snapshots request controls for body reads, cleanup and deferred getters', async () => {
+    const controller = new AbortController();
+    const other = new AbortController();
+    const options = { signal: controller.signal, timeoutMs: 1000, maxResponseBytes: 1024 };
+    let calls = 0;
+    const client = new NstDataClient('fixture-token', {
+        fetch: async url => {
+            calls++;
+            if (url.includes('/storage/read')) return new Response('# Stored');
+            options.signal = other.signal;
+            options.maxResponseBytes = 1;
+            return envelope({ data: { markdownRef: 'opaque' } });
+        },
+    });
+    const result = await client.getScrapeTaskResult('known', options);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    options.timeoutMs = 0;
+    assert.equal(await result.data.getMarkdown(), '# Stored');
+    assert.equal(calls, 2);
+    const next = await client.getScrapeTaskResult('known', { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(next.data.getMarkdown(), { name: 'AbortError' });
+    assert.equal(calls, 3);
+});
+
+test('snapshots declared controls from prototype getters on every request entry point', async () => {
+    class ByteLimit {
+        get maxResponseBytes() { return 1; }
+    }
+    const client = new NstDataClient('fixture-token', { fetch: async () => envelope({}) });
+    const request = { url: 'https://example.com', formats: ['markdown'] };
+    for (const run of [
+        () => client.submitScrapeTask(request, new ByteLimit()),
+        () => client.submitScrapeTaskSync(request, new ByteLimit()),
+        () => client.getScrapeTaskResult('known', new ByteLimit()),
+        () => client.submitCrawlTask(request, new ByteLimit()),
+        () => client.getCrawlStatus('known', new ByteLimit()),
+        () => client.listCrawlPages('known', {}, new ByteLimit()),
+        () => client.readStorage('opaque', new ByteLimit()),
+    ]) {
+        await assert.rejects(run(), /maxResponseBytes/);
+    }
+    class Deadline {
+        get timeoutMs() { return 0; }
+    }
+    await assert.rejects(client.getCrawlStatus('known', new Deadline()), /timeoutMs/);
+    const cancelled = AbortSignal.abort();
+    class Cancellation {
+        get signal() { return cancelled; }
+    }
+    await assert.rejects(client.getCrawlStatus('known', new Cancellation()), { name: 'AbortError' });
+});
+
+test('deferred getter overrides retain inherited controls and explicit undefined semantics', async () => {
+    const stored = 'x'.repeat(2048);
+    const client = new NstDataClient('fixture-token', {
+        fetch: async url => url.includes('/storage/read') ? new Response(stored)
+            : envelope({ data: { markdownRef: 'opaque' } }),
+    });
+    const getData = async () => (await client.getScrapeTaskResult('known', { maxResponseBytes: 1024 })).data;
+    class DeadlineOnly {
+        get timeoutMs() { return 1000; }
+    }
+    await assert.rejects((await getData()).getMarkdown(new DeadlineOnly()), /maxResponseBytes/);
+    class RaisedLimit {
+        get maxResponseBytes() { return 4096; }
+    }
+    assert.equal(await (await getData()).getMarkdown(new RaisedLimit()), stored);
+    class Unbounded {
+        get maxResponseBytes() { return undefined; }
+    }
+    assert.equal(await (await getData()).getMarkdown(new Unbounded()), stored);
+    assert.equal(await (await getData()).getMarkdown({ maxResponseBytes: undefined }), stored);
+    const cancelled = AbortSignal.abort();
+    class Cancellation {
+        get signal() { return cancelled; }
+    }
+    await assert.rejects((await getData()).getMarkdown(new Cancellation()), { name: 'AbortError' });
+});

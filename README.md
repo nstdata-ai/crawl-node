@@ -4,63 +4,86 @@
 
 Retrieve webpages as Markdown, HTML, links, PDF, screenshots or raw data from Node.js applications.
 
-## Choose a workflow
-
-| Your task | Start here | Result |
-|---|---|---|
-| Retrieve one page now | [Quick start](#quick-start) | Completed result and content getters |
-| Submit a page and retrieve it later | [Async scraping](docs/guide.md#async-scraping) | Task ID, status and page content |
-| Discover and crawl pages within a site | [Site crawling](docs/guide.md#site-crawling) | Progress, page results and cursors |
-| Wait for JavaScript or select content | [Scrape options](docs/guide.md#scrape-options) | Configurable page requests |
-| Read formats, metadata or deferred results | [Content and results](docs/guide.md#content-and-results) | Text, bytes, links and metadata |
-| Set limits or diagnose failures | [Request controls and errors](docs/guide.md#request-controls-and-errors) | Bounded requests and distinguishable errors |
-
 ## Install
 
-Supports Node.js 22 (22.18 or later) and 24.
+Requires Node.js 22.18+ in the 22.x line, or Node.js 24.
 
-```sh
-npm install @nstdata-ai/crawl@2.0.0
-```
+Version 2.0.0 is not published on npm yet. To use this source version, follow the [local installation steps](CONTRIBUTING.md#local-package-installation).
 
 Upgrading from 1.x? Read the [breaking changes](CHANGELOG.md#compatibility).
 
 ## Quick start
 
-Set your API key in `NSTDATA_API_TOKEN`. This example submits one synchronous page task and prints Markdown on success. Requests consume service credits.
+Get an API key from the [Nstdata dashboard](https://app.nstdata.io/). Put it in a local `.env` file:
+
+```dotenv
+NSTDATA_API_TOKEN=your-api-key
+```
+
+Save the following as `quickstart.mts`. It submits one page task and prints Markdown; service calls consume credits.
 
 ```typescript
-import { NstDataClient, Format } from '@nstdata-ai/crawl';
+import { NstDataClient, NstDataApiError, Format } from '@nstdata-ai/crawl';
 
-const TOKEN = process.env.NSTDATA_API_TOKEN;
+const token = process.env.NSTDATA_API_TOKEN;
+if (!token?.trim()) throw new Error('Set NSTDATA_API_TOKEN in your environment.');
+const client = new NstDataClient(token);
 
 async function main() {
-    if (!TOKEN?.trim()) throw new Error('Set NSTDATA_API_TOKEN locally');
-    const client = new NstDataClient(TOKEN);
-
-    const res = await client.submitScrapeTaskSync({
-        url: "https://example.com/",
+    const result = await client.submitScrapeTaskSync({
+        url: 'https://example.com/',
         formats: [Format.MARKDOWN],
-        timeout: 60000,
     });
-
-    if (res.success === false || res.status === 'failed' || res.status === 'expired') {
-        throw new Error('Scrape task failed');
+    if (result.success === false || result.status === 'failed' || result.status === 'expired') {
+        console.error('The scrape task failed.');
+        process.exitCode = 1;
+        return;
     }
-    if (res.status !== 'completed' || !res.data) throw new Error('No completed scrape data returned');
-    const md = await res.data.getMarkdown();
-    if (md === undefined) throw new Error('No Markdown content returned');
-    console.log(md);
+    if (result.status !== 'completed' || !result.data) {
+        console.error('No completed scrape data was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    const markdown = await result.data.getMarkdown();
+    if (markdown === undefined) {
+        console.error('No Markdown content was returned.');
+        process.exitCode = 1;
+        return;
+    }
+    console.log(markdown);
 }
 
-main().catch(() => {
-    console.error('Scrape failed; check the task status and local configuration.');
+main().catch(error => {
+    if (error instanceof NstDataApiError) {
+        console.error('API request failed', { statusCode: error.statusCode, code: error.code });
+    } else if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)) {
+        console.error(`${error.name}: local waiting stopped.`);
+    } else {
+        console.error('Transport or response decoding failed.');
+    }
     process.exitCode = 1;
 });
 ```
 
-## Next steps
+Run it from the application directory where the SDK is installed:
 
-The [usage guide](docs/guide.md) covers async and site workflows, request and result fields, content formats and errors. The SDK calls the existing Nstdata service; you do not need to deploy a crawler.
+```sh
+node --env-file=.env quickstart.mts
+```
+
+`.mts` runs directly on the supported Node.js versions, without a TypeScript runner or changes to your application's module type.
+
+## Choose a workflow
+
+| Your task | Guide |
+|---|---|
+| Submit a page and retrieve it later | [Asynchronous pages](docs/guide.md#asynchronous-pages) |
+| Discover pages within a site | [Site crawling](docs/guide.md#site-crawling) |
+| Read another result page or resume an existing crawl | [Read crawl pages](docs/guide.md#read-crawl-pages) |
+| Wait for JavaScript or perform browser actions | [JavaScript rendering](docs/guide.md#javascript-rendering) |
+| Read HTML, PDF and other output formats | [Content formats](docs/guide.md#content-formats) |
+| Set deadlines, cancel waiting or diagnose failures | [Request controls and errors](docs/guide.md#request-controls-and-errors) |
+
+The SDK calls the existing Nstdata service; no crawler deployment is required.
 
 [API documentation](https://docs.nstdata.io/docs/crawl) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [MIT license](LICENSE)

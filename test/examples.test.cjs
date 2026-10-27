@@ -129,3 +129,90 @@ test('unexpected states and completed results without Markdown fail before more 
         listCrawlPages: () => assert.fail('must not treat a partially failed crawl as success'),
     }), /Crawl contains failed pages/);
 });
+
+test('a known nonempty completed crawl cannot finish without reading a page', async () => {
+    const client = {
+        submitCrawlTask: async () => ({ id: 'known-crawl' }),
+        getCrawlStatus: async () => ({ status: 'completed', total: 2, completed: 2 }),
+        listCrawlPages: async () => ({ total: 2, data: [] }),
+    };
+    await assert.rejects(exampleCrawl(client), /No crawl pages returned/);
+    client.getCrawlStatus = async () => ({ status: 'completed', total: 0, completed: 0 });
+    client.listCrawlPages = async () => ({ total: 0, data: [] });
+    await exampleCrawl(client);
+});
+
+test('async workflow resumes an existing task without another submission', async () => {
+    const state = { taskId: 'existing-task' };
+    const client = {
+        submitScrapeTask: () => assert.fail('must not create another task'),
+        getScrapeTaskResult: async id => {
+            assert.equal(id, state.taskId);
+            return { status: 'completed', data: { getMarkdown: async () => '# Existing' } };
+        },
+    };
+    await exampleAsyncPolling(client, new AbortController().signal, state);
+});
+
+test('crawl workflow retains a usable cursor after failure and resumes without creation', async () => {
+    const state = {};
+    let fail = true;
+    const client = {
+        submitCrawlTask: async () => ({ id: 'existing-crawl' }),
+        getCrawlStatus: async () => ({ status: 'completed', total: 2, completed: 2 }),
+        listCrawlPages: async (_id, paging) => {
+            if (!paging.afterCursor) return {
+                data: [{ status: 'completed', data: { getMarkdown: async () => '# First' } }],
+                nextCursor: 'opaque-next',
+            };
+            assert.equal(paging.afterCursor, 'opaque-next');
+            if (fail) throw new Error('synthetic read failure');
+            return { data: [] };
+        },
+    };
+    await assert.rejects(exampleCrawl(client, new AbortController().signal, state), /synthetic read failure/);
+    assert.deepEqual(state, { crawlId: 'existing-crawl', afterCursor: 'opaque-next' });
+    fail = false;
+    client.submitCrawlTask = () => assert.fail('must not create another crawl');
+    await exampleCrawl(client, new AbortController().signal, state);
+    assert.deepEqual(state, { crawlId: 'existing-crawl', afterCursor: null });
+    client.getCrawlStatus = () => assert.fail('a completed state must not be queried again');
+    client.listCrawlPages = () => assert.fail('a completed state must not restart pagination');
+    await exampleCrawl(client, new AbortController().signal, state);
+});
+
+test('a recovery cursor without its crawl ID never creates a new task', async () => {
+    const client = { submitCrawlTask: () => assert.fail('must not create a task for an orphan cursor') };
+    await assert.rejects(exampleCrawl(client, new AbortController().signal, {
+        afterCursor: 'existing-cursor',
+    }), /crawl ID is required/);
+});
+
+test('a resumed crawl rejects a nonadvancing cursor without requesting the same batch again', async () => {
+    let reads = 0;
+    const state = { crawlId: 'existing-crawl', afterCursor: 'existing-cursor' };
+    await assert.rejects(exampleCrawl({
+        getCrawlStatus: async () => ({ status: 'completed' }),
+        listCrawlPages: async () => {
+            reads++;
+            return { data: [], nextCursor: 'existing-cursor' };
+        },
+    }, new AbortController().signal, state), /Repeated pagination cursor/);
+    assert.equal(reads, 1);
+    assert.equal(state.afterCursor, 'existing-cursor');
+});
+
+test('an explicitly invalid saved ID never becomes a new submission', async () => {
+    for (const id of ['', '   ', null]) {
+        const client = {
+            submitScrapeTask: () => assert.fail('must not submit another scrape'),
+            submitCrawlTask: () => assert.fail('must not submit another crawl'),
+        };
+        await assert.rejects(exampleAsyncPolling(client, new AbortController().signal, {
+            taskId: id,
+        }), /existing task ID/);
+        await assert.rejects(exampleCrawl(client, new AbortController().signal, {
+            crawlId: id,
+        }), /existing crawl ID/);
+    }
+});
