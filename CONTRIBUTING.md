@@ -13,6 +13,24 @@ npm test
 npm run check:package
 ```
 
+Tests must use synthetic responses or loopback servers. Cover changes at the public request/result boundary, including failure, empty content, cancellation and resource cleanup. Package checks validate installation, imports, nullable result types, rendered Markdown and packaged links. They run every bilingual `.mts` example directly with the supported Node.js runtime against isolated fixtures, including failed tasks, missing content, stored results and pagination without resubmission. The Markdown renderer is a development dependency; the SDK has no runtime dependencies.
+
+Verify API changes against the public backend implementation when available, then the official API documentation. Keep source checks separate from live-service results. Do not add automatic retries for task creation.
+
+Keep English and Chinese examples consistent. Real API examples may consume credits; run them only against authorized targets. Include no credentials or private responses in fixtures or bug reports.
+
+## Repository examples
+
+Set `NSTDATA_API_TOKEN` in the process environment, then run:
+
+```sh
+npm run example
+```
+
+The repository's `example.ts` submits one synchronous page task. Its exported async and site workflows stop after at most 20 status queries; site pagination stops after 100 batches or a repeated cursor. Each HTTP response is capped at 1 MiB, with a default two-minute overall deadline. A supplied signal controls cancellation.
+
+To resume, retain the optional third argument: `{ taskId }` for `exampleAsyncPolling`, or `{ crawlId, afterCursor }` for `exampleCrawl`. The examples update this object only after accepting a task or consuming a complete result batch. A crawl cursor of `null` marks completion; passing that completed state again does not restart reading. Keep state after a failure; retrying a partly consumed batch may repeat output. These functions are repository examples, not SDK exports.
+
 ## Local package installation
 
 Build an installable archive from the checkout:
@@ -27,16 +45,6 @@ This produces `nstdata-ai-crawl-2.0.0.tgz`. Install it from a separate applicati
 npm install /path/to/crawl-node/nstdata-ai-crawl-2.0.0.tgz
 ```
 
-Tests must use synthetic responses or loopback servers. Cover changes at the public request/result boundary, including failure, empty content, cancellation and resource cleanup. Package checks validate installation, imports, nullable result types, rendered Markdown and packaged links. They run every bilingual `.mts` example directly with the supported Node.js runtime against isolated fixtures, including failed tasks, missing content, stored results and pagination without resubmission. The Markdown renderer is a development dependency; the SDK has no runtime dependencies.
-
-Verify API changes against the public backend implementation when available, then the official API documentation. Keep source checks separate from live-service results. Do not add automatic retries for task creation.
-
-Keep English and Chinese examples consistent. Real API examples may consume credits; run them only against authorized targets. Include no credentials or private responses in fixtures or bug reports.
-
-The repository's `example.ts` contains one synchronous scrape plus exported async and site workflows. `npm run example` submits only the synchronous task. The other workflows stop after at most 20 status queries; site pagination stops after 100 batches or a repeated cursor. Each HTTP response is capped at 1 MiB, with a default two-minute overall deadline. A supplied signal controls cancellation.
-
-To resume, retain the optional third argument: `{ taskId }` for `exampleAsyncPolling`, or `{ crawlId, afterCursor }` for `exampleCrawl`. The examples update this object only after accepting a task or consuming a complete result batch. A crawl cursor of `null` marks completion; passing that completed state again does not restart reading. Keep state after a failure; retrying a partly consumed batch may repeat output. These functions are repository examples, not SDK exports.
-
 ## Publishing to npm
 
 The `Publish npm` workflow is manually dispatched from `main`. Pushes and pull requests only run checks. Publishing requires approval through the `npm-production` GitHub environment.
@@ -48,7 +56,7 @@ Repository administrators configure these once:
 
 For each release:
 
-1. Review the version, changelog and source changes, then merge the approved commit into `main` after CI passes.
+1. Review the version, changelog, public installation instructions and source changes, then merge the approved commit into `main` after CI passes.
 2. Open **Actions → Publish npm → Run workflow**, choose `main`, and enter the stable version from `package.json` and the full reviewed commit SHA. The commit must equal the workflow run's commit; the workflow does not bump versions or select another revision.
 3. After the checks pass, compare the commit, version and archive SHA256 in the run summary with the intended release. Download the run's package artifact if further inspection is needed, then approve the pending `npm-production` deployment.
 

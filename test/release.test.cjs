@@ -120,7 +120,7 @@ test('publish CLI uses one checked archive without retries and preserves safe fa
             }
             if(args[0]==='install') {
                 const folder=path.join(process.cwd(),'node_modules/@nstdata-ai/crawl');fs.mkdirSync(folder,{recursive:true});
-                fs.writeFileSync(path.join(folder,'package.json'),JSON.stringify({name:'${manifest.name}',version:'${manifest.version}',main:'index.cjs'}));
+                fs.writeFileSync(path.join(folder,'package.json'),JSON.stringify({name:'${manifest.name}',version:process.env.RELEASE_TEST_STALE_LATEST==='1'?'1.0.1':'${manifest.version}',main:'index.cjs'}));
                 fs.writeFileSync(path.join(folder,'index.cjs'),'exports.NstDataClient=class {};');
             }
         `, { mode: 0o755 });
@@ -138,23 +138,26 @@ test('publish CLI uses one checked archive without retries and preserves safe fa
                 return {status,json:async()=>data};
             };
         `);
-        for (const failure of [false, true]) {
+        for (const [failure, staleLatest] of [[false, false], [true, false], [false, true]]) {
             fs.rmSync(log, { force: true });
             const result = spawnSync(process.execPath, ['--require', preload, path.resolve(__dirname, '../scripts/release.cjs'), 'publish', directory], {
                 env: { ...process.env, ...env, RELEASE_VERSION: manifest.version, PATH: `${bin}${path.delimiter}${process.env.PATH}`, NODE_AUTH_TOKEN: '', NPM_TOKEN: '',
-                    RELEASE_MANIFEST_SHA256: hash(text), RELEASE_TEST_LOG: log, RELEASE_TEST_FAIL: failure ? '1' : '0', GITHUB_STEP_SUMMARY: path.join(directory, 'summary.md') },
+                    RELEASE_MANIFEST_SHA256: hash(text), RELEASE_TEST_LOG: log, RELEASE_TEST_FAIL: failure ? '1' : '0',
+                    RELEASE_TEST_STALE_LATEST: staleLatest ? '1' : '0', GITHUB_STEP_SUMMARY: path.join(directory, 'summary.md') },
                 encoding: 'utf8', timeout: 15000,
             });
-            assert.equal(result.status, failure ? 1 : 0, result.stderr);
+            assert.equal(result.status, failure || staleLatest ? 1 : 0, result.stderr);
             const commands = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
             assert.deepEqual(commands[0], ['publish', path.join(directory, manifest.filename), '--access', 'public', '--registry',
-                'https://registry.npmjs.org', '--ignore-scripts', '--provenance', '--fetch-retries=0']);
+                'https://registry.npmjs.org', '--ignore-scripts', '--provenance', '--tag', 'latest', '--fetch-retries=0']);
             assert.equal(commands.filter(args => args[0] === 'publish').length, 1);
             assert.equal(commands.length, failure ? 1 : 2);
+            if (!failure) assert.equal(commands[1][1], current.name, 'Verify the documented default npm install, not only a pinned version');
             if (failure) {
                 assert.match(result.stderr, /npm publish failed \(exit 1, E403\)/);
                 assert.ok(!result.stderr.includes('fixture-secret-must-not-appear'));
             }
+            if (staleLatest) assert.match(result.stderr, /1\.0\.1/);
         }
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

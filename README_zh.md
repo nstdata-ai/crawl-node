@@ -8,7 +8,9 @@
 
 需要 Node.js 22 系列的 22.18 及以上版本，或 Node.js 24。
 
-2.0.0 尚未发布到 npm。使用当前源码版本，请按[本地安装步骤](CONTRIBUTING.md#local-package-installation)操作。
+```sh
+npm install @nstdata-ai/crawl
+```
 
 从 1.x 升级前，请阅读[不兼容变化](CHANGELOG.md#compatibility)。
 
