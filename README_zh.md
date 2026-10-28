@@ -28,7 +28,10 @@ NSTDATA_API_TOKEN=your-api-key
 import { NstDataClient, NstDataApiError, Format } from '@nstdata-ai/crawl';
 
 const token = process.env.NSTDATA_API_TOKEN;
-if (!token?.trim()) throw new Error('Set NSTDATA_API_TOKEN in your environment.');
+if (!token?.trim()) {
+    console.error('Set NSTDATA_API_TOKEN in your environment.');
+    process.exit(1);
+}
 const client = new NstDataClient(token);
 
 async function main() {
