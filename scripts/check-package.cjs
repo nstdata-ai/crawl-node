@@ -323,7 +323,7 @@ let registryProcess;
 
     const scenarios = {
         'client.mts': ['success'],
-        'quickstart.mts': ['success', 'reference', 'failed', 'pending', 'missing', 'http', 'timeout'],
+        'quickstart.mts': ['success', 'reference', 'failed', 'pending', 'missing', 'http', 'timeout', 'no-key'],
         'submit-async.mts': ['success', 'missing', 'http'],
         'read-async.mts': ['success', 'reference', 'failed', 'pending', 'missing', 'unknown', 'http', 'timeout'],
         'start-crawl.mts': ['success', 'missing', 'http'],
@@ -365,6 +365,7 @@ let registryProcess;
                     NSTDATA_TASK_ID: 'fixture-task', NSTDATA_CRAWL_ID: 'fixture-crawl',
                     DOCS_SAMPLE: sample.filename, DOCS_CASE: variant, DOCS_LOG: log };
                 delete env.NSTDATA_API_TOKEN;
+                fs.writeFileSync(path.join(directory, '.env'), variant === 'no-key' ? '' : application.environment + '\n');
                 const command = commands.get(sample.filename) ?? ['--env-file=.env', sample.filename];
                 const result = spawnSync(process.execPath,
                     ['--require', fixturePath, ...command], {
@@ -372,6 +373,14 @@ let registryProcess;
                     });
                 assert.ifError(result.error);
                 const { stdout, stderr, status } = result;
+                if (variant === 'no-key') {
+                    assert.equal(status, 1);
+                    assert.match(stderr, /Set NSTDATA_API_TOKEN/);
+                    assert.doesNotMatch(stderr, /\n\s+at /);
+                    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), []);
+                    runs++;
+                    continue;
+                }
                 const failure = ['failed', 'pending', 'missing', 'unknown', 'empty', 'repeated', 'http', 'timeout',
                     'existing-files'].includes(variant)
                     && !(variant === 'pending' && ['read-async.mts', 'read-pages.mts'].includes(sample.filename))
