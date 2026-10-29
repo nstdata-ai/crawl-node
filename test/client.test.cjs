@@ -271,7 +271,7 @@ test('inline binary and raw content survive sync, result and crawl page response
         const client = new NstDataClient('test-token', { fetch: async () => {
             assert.equal(++requests, 1, 'inline getters must not download references');
             const data = {
-                pdf: 'JVBERi0xLjQK', screenshot: 'AP+A', rawData: '<p>雪</p>',
+                pdf: 'JVBERi0xLjQK', screenshot: 'AP+A', rawData: '<p>雪😀\uFFFD</p>',
                 ...(operation === 'result' ? {
                     pdfRef: 'pdf-ref', screenshotRef: 'image-ref', rawDataRef: 'raw-ref',
                 } : {}),
@@ -285,10 +285,24 @@ test('inline binary and raw content survive sync, result and crawl page response
         for (let i = 0; i < 2; i++) {
             assert.deepEqual(await data.getPdf(), Buffer.from([37, 80, 68, 70, 45, 49, 46, 52, 10]));
             assert.deepEqual(await data.getScreenshot(), Buffer.from([0, 255, 128]));
-            assert.deepEqual(await data.getRawData(), Buffer.from([60, 112, 62, 233, 155, 170, 60, 47, 112, 62]));
+            assert.deepEqual(await data.getRawData(), Buffer.from('3c703ee99baaf09f9880efbfbd3c2f703e', 'hex'));
         }
         assert.equal(requests, 1);
     }
+});
+
+test('referenced raw data preserves non-UTF-8 bytes and caches the successful read', async () => {
+    const expected = Buffer.from([0, 255, 216]);
+    let requests = 0;
+    const client = new NstDataClient('test-token', { fetch: async url => {
+        requests++;
+        return url.includes('/storage/read?') ? new Response(expected)
+            : envelope({ data: { rawData: null, rawDataRef: 'binary-ref' } });
+    } });
+    const result = await client.getScrapeTaskResult('existing-task');
+    assert.deepEqual(await result.data.getRawData(), expected);
+    assert.deepEqual(await result.data.getRawData(), expected);
+    assert.equal(requests, 2, 'one result read and one cached storage download');
 });
 
 test('preserves task identity and explicit truncation on sync, result and crawl pages', async () => {
@@ -351,7 +365,7 @@ test('rejects malformed inline content and truncation without exposing it or ret
         ...['pdf', 'screenshot'].flatMap(field => [
             42, false, {}, [], 'private-response!', 'A', 'AQ=I', 'AQ===', 'AQ=', 'AAAA==',
         ].map(value => ({ [field]: value }))),
-        ...[42, false, {}, []].map(rawData => ({ rawData })),
+        ...[42, false, {}, [], '\ud800', '\udc00', 'prefix\ud800suffix'].map(rawData => ({ rawData })),
         ...['true', 1, {}, []].map(truncated => ({ truncated })),
     ];
     for (const data of invalid) {
