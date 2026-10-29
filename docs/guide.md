@@ -308,6 +308,8 @@ node --env-file=.env formats.mts
 
 Getters prefer inline content; otherwise they download the corresponding opaque reference. Do not decode references or construct storage URLs. Successful reads are cached, including empty content; failed reads are not. Empty strings or buffers are valid, whereas `undefined` means absent. Raw data is bytes, not structured JSON extraction.
 
+Invalid Unicode in inline raw text is rejected rather than replaced during UTF-8 encoding. Referenced raw data retains its original bytes.
+
 `metadata` contains available title, description, language, canonical URL, OpenGraph image and target status code. `truncated: true` indicates service truncation; an absent flag does not prove completeness. Optional response content and list `data` may be `null` or absent, so check the result before reading.
 
 ## Request controls and errors

@@ -10,6 +10,7 @@
 - Validate known response fields, crawl counters and cursors while preserving unknown extensions and future string statuses. Normalize nullable scalar fields as absent; retain explicit `data: null` and reflect it in TypeScript types.
 - Reject redirects and invalid task IDs or pagination controls before consuming results. Task creation is never retried automatically.
 - Preserve empty inline and deferred content. Decode inline PDF/screenshots as Base64 and raw text as UTF-8 bytes; malformed stored HTML/Markdown is rejected without caching it.
+- Reject malformed Unicode in inline raw text instead of inserting replacement characters.
 - Provide runnable bilingual examples for single pages, existing tasks, crawl pagination, browser actions and output formats. Complete repository examples retain recovery state and use bounded polling.
 - Add manually triggered, approval-gated npm publishing with a fixed reviewed commit, verified package artifact and trusted publishing.
 

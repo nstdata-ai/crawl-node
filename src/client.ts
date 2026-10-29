@@ -262,7 +262,8 @@ export class NstDataClient {
                 throw new NstDataApiError('API error: invalid task content');
             }
         }
-        if ((data.rawData != null && typeof data.rawData !== 'string')
+        // UTF-8 cannot represent unpaired UTF-16 surrogate code units.
+        if ((data.rawData != null && (typeof data.rawData !== 'string' || /\p{Surrogate}/u.test(data.rawData)))
             || (data.truncated != null && typeof data.truncated !== 'boolean')) {
             throw new NstDataApiError('API error: invalid task content');
         }

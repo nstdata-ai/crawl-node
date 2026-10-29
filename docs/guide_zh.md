@@ -308,6 +308,8 @@ node --env-file=.env formats.mts
 
 getter 优先使用内联内容，否则下载对应的不透明引用；不要解码引用或自行拼接存储 URL。成功读取会缓存，包括空内容；失败不缓存。空字符串或空 Buffer 是有效结果，`undefined` 表示缺失。原始数据是字节，不是结构化 JSON 提取。
 
+内联原始文本含无效 Unicode 时返回错误，不会用替换字符继续编码。通过引用读取的原始数据保留其原有字节。
+
 `metadata` 提供可用的标题、描述、语言、canonical URL、OpenGraph 图片和目标 HTTP 状态。`truncated: true` 表示服务截断；标记缺失不证明内容完整。响应正文和页面列表的可选 `data` 可以是 `null` 或缺失，读取前需检查结果。
 
 ## 请求控制与错误
