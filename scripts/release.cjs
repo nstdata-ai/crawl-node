@@ -4,6 +4,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { setTimeout: delay } = require('node:timers/promises');
 
 const root = path.resolve(__dirname, '..');
 const repository = 'nstdata-ai/crawl-node';
@@ -68,14 +69,24 @@ function verifyArtifact(directory, env) {
     return { manifest, archive };
 }
 
-async function checkRegistry(version, integrity, fetchImpl) {
-    const result = await request(`${registry}/${encodeURIComponent(name)}/${version}`, undefined, fetchImpl);
-    if (integrity === undefined) assert.equal(result.status, 404, 'Version already exists; do not republish');
-    else {
-        assert.equal(result.status, 200, 'Published version not visible; inspect registry before another dispatch');
+async function checkRegistry(version, integrity, fetchImpl, wait = delay) {
+    const attempts = integrity === undefined ? 1 : 7;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        const result = await request(`${registry}/${encodeURIComponent(name)}/${version}`, undefined, fetchImpl);
+        if (integrity === undefined) {
+            assert.equal(result.status, 404, 'Version already exists; do not republish');
+            return;
+        }
+        if (result.status === 404 && attempt < attempts - 1) {
+            console.log('Published version not yet visible; waiting before a read-only registry check.');
+            await wait(30000);
+            continue;
+        }
+        assert.equal(result.status, 200, 'Published version not visible after bounded checks; inspect registry before another dispatch');
         assert.equal(result.data.name, name);
         assert.equal(result.data.version, version);
         assert.equal(result.data.dist?.integrity, integrity, 'Published integrity differs');
+        return;
     }
 }
 
