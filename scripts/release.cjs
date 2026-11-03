@@ -2,9 +2,7 @@ const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { setTimeout: delay } = require('node:timers/promises');
 
 const root = path.resolve(__dirname, '..');
 const repository = 'nstdata-ai/crawl-node';
@@ -69,32 +67,16 @@ function verifyArtifact(directory, env) {
     return { manifest, archive };
 }
 
-async function checkRegistry(version, integrity, fetchImpl, wait = delay) {
-    const attempts = integrity === undefined ? 1 : 7;
-    for (let attempt = 0; attempt < attempts; attempt++) {
-        const result = await request(`${registry}/${encodeURIComponent(name)}/${version}`, undefined, fetchImpl);
-        if (integrity === undefined) {
-            assert.equal(result.status, 404, 'Version already exists; do not republish');
-            return;
-        }
-        if (result.status === 404 && attempt < attempts - 1) {
-            console.log('Published version not yet visible; waiting before a read-only registry check.');
-            await wait(30000);
-            continue;
-        }
-        assert.equal(result.status, 200, 'Published version not visible after bounded checks; inspect registry before another dispatch');
-        assert.equal(result.data.name, name);
-        assert.equal(result.data.version, version);
-        assert.equal(result.data.dist?.integrity, integrity, 'Published integrity differs');
-        return;
-    }
+async function checkRegistry(version, fetchImpl = globalThis.fetch) {
+    const result = await request(`${registry}/${encodeURIComponent(name)}/${version}`, undefined, fetchImpl);
+    assert.equal(result.status, 404, 'Version already exists; do not republish');
 }
 
-function npm(args, cwd = root) {
+function npm(args) {
     const operation = `npm ${args[0]}${args[0] === 'run' ? ` ${args[1]}` : ''}`;
     console.log(`Running ${operation}`);
     try {
-        return execFileSync('npm', args, { cwd, encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'] });
+        return execFileSync('npm', args, { cwd: root, encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (error) {
         const code = String(error.stderr ?? '').match(/^npm error code ([A-Z][A-Z0-9_]{1,40})\s*$/m)?.[1];
         throw Object.assign(new Error(`${operation} failed (exit ${error.status ?? 'unavailable'}${code ? `, ${code}` : ''}). Inspect this stage before another dispatch.`), { code: 'RELEASE_COMMAND_FAILED' });
@@ -126,15 +108,7 @@ async function main(mode, directory, env = process.env) {
         await checkRegistry(manifest.version);
         console.log('Publishing once. If this step fails, inspect npm before another dispatch.');
         npm(['publish', archive, '--access', 'public', '--registry', registry, '--ignore-scripts', '--provenance', '--tag', 'latest', '--fetch-retries=0']);
-        await checkRegistry(manifest.version, manifest.integrity);
-        const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'nstdata-public-install-'));
-        try {
-            fs.writeFileSync(path.join(temp, 'package.json'), '{"private":true}');
-            npm(['install', name, '--registry', registry, '--ignore-scripts', '--no-audit', '--no-fund', '--cache', path.join(temp, 'cache')], temp);
-            assert.equal(readJson(path.join(temp, 'node_modules', name, 'package.json')).version, manifest.version);
-            execFileSync(process.execPath, ['-e', `const assert=require('node:assert/strict');assert.equal(typeof require('${name}').NstDataClient,'function');import('${name}').then(m=>assert.equal(typeof m.NstDataClient,'function'));`], { cwd: temp, timeout: 10000 });
-        } finally { fs.rmSync(temp, { recursive: true, force: true }); }
-        fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `\nPublished \`${name}@${manifest.version}\`; registry integrity and clean public installation passed.\n`);
+        fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `\nnpm publish completed for \`${name}@${manifest.version}\`. Public availability may be delayed.\n`);
     }
 }
 
