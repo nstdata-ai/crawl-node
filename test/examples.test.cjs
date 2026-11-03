@@ -2,6 +2,49 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 require('ts-node').register();
 const { exampleAsyncPolling, exampleCrawl } = require('../example.ts');
+const { ScrapeDataDto } = require('../src');
+
+for (const workflow of ['scrape', 'crawl']) {
+    test(`${workflow} example preserves partial and empty content and warns only for explicit truncation`, async t => {
+        const printed = [], warnings = [];
+        t.mock.method(console, 'log', (...args) => printed.push(args));
+        t.mock.method(console, 'error', (...args) => warnings.push(args));
+        for (const truncated of [undefined, false, true]) {
+            for (const markdown of ['# Partial fixture', '']) {
+                for (const reference of [false, true]) {
+                    printed.length = warnings.length = 0;
+                    let reads = 0;
+                    const data = new ScrapeDataDto({ truncated,
+                        ...(reference ? { markdownRef: 'fixture-markdown' } : { markdown }) }, async ref => {
+                        assert.equal(ref, 'fixture-markdown');
+                        reads++;
+                        return new TextEncoder().encode(markdown).buffer;
+                    });
+                    const result = { status: 'completed', success: true, data };
+                    const client = {
+                        submitScrapeTask: () => assert.fail('must not create another task'),
+                        submitCrawlTask: () => assert.fail('must not create another crawl'),
+                        getScrapeTaskResult: async () => result,
+                        getCrawlStatus: async () => ({ status: 'completed', completed: 1 }),
+                        listCrawlPages: async () => ({ data: [{ ...result, url: 'https://example.com/' }] }),
+                    };
+                    if (workflow === 'scrape') {
+                        await exampleAsyncPolling(client, new AbortController().signal, { taskId: 'existing-task' });
+                        assert.deepEqual(printed, [[markdown]]);
+                    } else {
+                        const state = { crawlId: 'existing-crawl' };
+                        await exampleCrawl(client, new AbortController().signal, state);
+                        assert.equal(state.afterCursor, null);
+                        assert.deepEqual(printed, [['https://example.com/', markdown]]);
+                    }
+                    assert.equal(reads, reference ? 1 : 0);
+                    assert.equal(warnings.length, truncated === true ? 1 : 0);
+                    if (truncated === true) assert.match(warnings[0][0], /Warning:.*truncated.*partial/);
+                }
+            }
+        }
+    });
+}
 
 test('polling stops immediately for an already cancelled operation', async () => {
     const client = { submitScrapeTask: () => assert.fail('must not submit') };

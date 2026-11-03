@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.1
+
+- Warn on stderr when runnable examples consume service-truncated results, while preserving the returned content and successful exit status. Cover inline and stored content, including empty output, without creating or retrying tasks.
+
 ## 2.0.0
 
 ### Changes

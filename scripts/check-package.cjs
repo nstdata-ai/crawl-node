@@ -224,10 +224,14 @@ let registryProcess;
             const wrap = data => Response.json({ code: 200, err: false, data });
             const content = () => {
                 if (variant === 'missing') return {};
-                if (sample === 'formats.mts') return variant === 'reference'
+                const empty = variant.endsWith('-empty');
+                const data = sample === 'formats.mts' ? variant.startsWith('reference')
                     ? { htmlRef: 'fixture-html', pdfRef: 'fixture-pdf' }
-                    : { html: '<h1>Fixture</h1>', pdf: 'JVBERi0xLjQK' };
-                return variant.startsWith('reference') ? { markdownRef: 'fixture-markdown' } : { markdown: '# Fixture' };
+                    : { html: empty ? '' : '<h1>Fixture</h1>', pdf: empty ? '' : 'JVBERi0xLjQK' }
+                    : variant.startsWith('reference') ? { markdownRef: 'fixture-markdown' }
+                        : { markdown: empty ? '' : '# Fixture' };
+                return { ...data, truncated: variant === 'not-truncated' ? false
+                    : variant.includes('truncated') ? true : undefined };
             };
             const result = () => ({
                 status: ['failed', 'failed-status'].includes(variant) ? 'failed'
@@ -272,7 +276,8 @@ let registryProcess;
                 if (url.pathname === '/api/v1/crawl/storage/read') {
                     const ref = url.searchParams.get('st');
                     assert.ok(['fixture-markdown', 'fixture-html', 'fixture-pdf'].includes(ref));
-                    return new Response(ref === 'fixture-pdf' ? Buffer.from([37, 80, 68, 70, 45, 49, 46, 52, 10])
+                    return new Response(variant.endsWith('-empty') ? ''
+                        : ref === 'fixture-pdf' ? Buffer.from([37, 80, 68, 70, 45, 49, 46, 52, 10])
                         : ref === 'fixture-html' ? '<h1>Fixture</h1>' : '# Fixture');
                 }
                 if (url.pathname === '/api/v1/crawl/scrape/fixture-task') {
@@ -321,16 +326,17 @@ let registryProcess;
     delete probeEnv.NODE_OPTIONS;
     execFileSync(process.execPath, [networkProbe], { env: probeEnv, timeout: 10000, stdio: 'pipe' });
 
+    const contentCases = ['not-truncated', 'truncated', 'reference-truncated', 'truncated-empty', 'reference-truncated-empty'];
     const scenarios = {
         'client.mts': ['success'],
-        'quickstart.mts': ['success', 'reference', 'failed', 'pending', 'missing', 'http', 'timeout', 'no-key'],
+        'quickstart.mts': ['success', 'reference', ...contentCases, 'failed', 'pending', 'missing', 'http', 'timeout', 'no-key'],
         'submit-async.mts': ['success', 'missing', 'http'],
-        'read-async.mts': ['success', 'reference', 'failed', 'pending', 'missing', 'unknown', 'http', 'timeout'],
+        'read-async.mts': ['success', 'reference', ...contentCases, 'failed', 'pending', 'missing', 'unknown', 'http', 'timeout'],
         'start-crawl.mts': ['success', 'missing', 'http'],
-        'read-pages.mts': ['success', 'reference', 'next', 'reference-next', 'failed', 'pending',
+        'read-pages.mts': ['success', 'reference', ...contentCases, 'next', 'reference-next', 'failed', 'pending',
             'missing', 'empty', 'zero', 'repeated', 'http', 'timeout'],
-        'render.mts': ['success', 'reference', 'missing', 'http'],
-        'formats.mts': ['success', 'reference', 'missing', 'http', 'existing-files'],
+        'render.mts': ['success', 'reference', ...contentCases, 'missing', 'http'],
+        'formats.mts': ['success', 'reference', ...contentCases, 'missing', 'http', 'existing-files'],
         'controls.mts': ['success', 'failed', 'failed-status', 'expired-status', 'http', 'timeout'],
     };
     let programs = 0, runs = 0;
@@ -387,6 +393,11 @@ let registryProcess;
                     && !(variant === 'failed' && sample.filename === 'controls.mts');
                 assert.equal(status, failure ? 1 : 0, `${file}/${sample.filename}/${variant}: ${stderr}`);
                 assert.doesNotMatch(stdout + stderr, /private-fixture-message|fixture-token/);
+                if (variant.includes('truncated') && variant !== 'not-truncated') {
+                    assert.equal((stderr.match(/Warning:.*truncated.*partial/g) ?? []).length, 1,
+                        `Missing partial-content warning in ${file}/${sample.filename}/${variant}`);
+                    assert.doesNotMatch(stdout, /Warning:/);
+                } else assert.doesNotMatch(stderr, /Warning:.*truncated/);
                 const requests = JSON.parse(fs.readFileSync(log, 'utf8'));
                 const creates = requests.filter(([method]) => method === 'POST');
                 const submits = ['quickstart.mts', 'submit-async.mts', 'start-crawl.mts', 'render.mts', 'formats.mts']
@@ -413,9 +424,12 @@ let registryProcess;
                 }
                 if (variant === 'http') assert.match(stdout + stderr, /403/);
                 if (variant === 'timeout') assert.match(stdout + stderr, /TimeoutError/);
-                if (['success', 'reference', 'next', 'reference-next'].includes(variant)
+                if (['success', 'reference', 'next', 'reference-next', 'not-truncated', 'truncated', 'reference-truncated'].includes(variant)
                     && ['quickstart.mts', 'read-async.mts', 'read-pages.mts', 'render.mts'].includes(sample.filename)) {
                     assert.match(stdout, /# Fixture/);
+                }
+                if (variant.endsWith('-empty') && sample.filename !== 'formats.mts') {
+                    assert.equal(stdout, sample.filename === 'read-pages.mts' ? 'https://example.com/ \n' : '\n');
                 }
                 if (sample.filename === 'read-pages.mts' && !failure && variant !== 'pending') {
                     const last = stderr.trim().split('\n').at(-1);
@@ -424,9 +438,10 @@ let registryProcess;
                     });
                 }
                 if (sample.filename === 'formats.mts' && !failure) {
-                    assert.equal(fs.readFileSync(path.join(directory, 'page.html'), 'utf8'), '<h1>Fixture</h1>');
+                    assert.equal(fs.readFileSync(path.join(directory, 'page.html'), 'utf8'),
+                        variant.endsWith('-empty') ? '' : '<h1>Fixture</h1>');
                     assert.deepEqual(fs.readFileSync(path.join(directory, 'page.pdf')),
-                        Buffer.from([37, 80, 68, 70, 45, 49, 46, 52, 10]));
+                        variant.endsWith('-empty') ? Buffer.alloc(0) : Buffer.from([37, 80, 68, 70, 45, 49, 46, 52, 10]));
                 }
                 if (variant === 'existing-files') {
                     for (const output of ['page.html', 'page.pdf']) {

@@ -50,7 +50,7 @@ test('the documented npm example command runs its actual entry point without ext
                 if (variant === 'timeout') throw new DOMException('private-fixture-message', 'TimeoutError');
                 if (url.pathname === '/api/v1/crawl/storage/read') {
                     assert.equal(url.searchParams.get('st'), 'fixture-markdown');
-                    return new Response('# Example fixture');
+                    return new Response(variant.endsWith('-empty') ? '' : '# Example fixture');
                 }
                 assert.equal(options.method, 'POST');
                 assert.equal(url.pathname, '/api/v1/crawl/scrape');
@@ -62,12 +62,16 @@ test('the documented npm example command runs its actual entry point without ext
                 return Response.json({ code: 200, err: false, data: {
                     status: variant === 'failed' ? 'failed' : 'completed',
                     success: variant !== 'failed', errorMessage: 'private-fixture-message',
-                    data: variant === 'missing' ? {} : variant === 'reference'
-                        ? { markdownRef: 'fixture-markdown' } : { markdown: '# Example fixture' },
+                    data: variant === 'missing' ? {} : {
+                        truncated: variant === 'not-truncated' ? false : variant.includes('truncated') ? true : undefined,
+                        ...(variant.startsWith('reference') ? { markdownRef: 'fixture-markdown' }
+                            : { markdown: variant.endsWith('-empty') ? '' : '# Example fixture' }),
+                    },
                 } });
             };
         `);
-        for (const variant of ['success', 'reference', 'failed', 'missing', 'http', 'invalid-json', 'timeout', 'no-token']) {
+        for (const variant of ['success', 'reference', 'not-truncated', 'truncated', 'reference-truncated',
+            'truncated-empty', 'reference-truncated-empty', 'failed', 'missing', 'http', 'invalid-json', 'timeout', 'no-token']) {
             fs.rmSync(log, { force: true });
             const result = spawnSync(process.execPath, [npmCli, ...commands[0].slice(1)], {
                 cwd: directory, encoding: 'utf8', timeout: 20000,
@@ -78,14 +82,23 @@ test('the documented npm example command runs its actual entry point without ext
                     npm_config_update_notifier: 'false', EXAMPLE_CASE: variant, EXAMPLE_REQUEST_LOG: log },
             });
             assert.ifError(result.error);
-            assert.equal(result.status, ['success', 'reference'].includes(variant) ? 0 : 1,
+            const succeeded = ['success', 'reference', 'not-truncated', 'truncated', 'reference-truncated',
+                'truncated-empty', 'reference-truncated-empty'].includes(variant);
+            assert.equal(result.status, succeeded ? 0 : 1,
                 `${variant}: ${result.stderr}`);
             assert.doesNotMatch(result.stdout + result.stderr, /private-fixture-message|example-fixture-token/);
             const requests = JSON.parse(fs.readFileSync(log, 'utf8'));
-            assert.deepEqual(requests, variant === 'no-token' ? [] : variant === 'reference'
+            assert.deepEqual(requests, variant === 'no-token' ? [] : variant.startsWith('reference')
                 ? [['POST', '/api/v1/crawl/scrape'], ['GET', '/api/v1/crawl/storage/read']]
                 : [['POST', '/api/v1/crawl/scrape']]);
-            if (['success', 'reference'].includes(variant)) assert.match(result.stdout, /# Example fixture/);
+            if (succeeded) {
+                if (variant.endsWith('-empty')) assert.doesNotMatch(result.stdout, /# Example fixture/);
+                else assert.match(result.stdout, /# Example fixture/);
+            }
+            if (variant.includes('truncated') && variant !== 'not-truncated') {
+                assert.match(result.stderr, /Warning:.*truncated.*partial/);
+                assert.doesNotMatch(result.stdout, /Warning:/);
+            } else assert.doesNotMatch(result.stderr, /Warning:.*truncated/);
             if (variant === 'http') assert.match(result.stderr, /403/);
             if (variant === 'timeout') assert.match(result.stderr, /TimeoutError/);
         }

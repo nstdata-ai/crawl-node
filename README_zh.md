@@ -55,6 +55,9 @@ async function main() {
         process.exitCode = 1;
         return;
     }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
+    }
     console.log(markdown);
 }
 
@@ -77,6 +80,8 @@ node --env-file=.env quickstart.mts
 ```
 
 `.mts` 可由支持的 Node.js 版本直接执行，无需 TypeScript runner，也不需要修改应用的模块类型。
+
+如果服务将结果标记为已截断，示例会向 stderr 提示，同时继续输出返回的正文。
 
 ## 按任务继续使用
 

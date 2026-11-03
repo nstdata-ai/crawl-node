@@ -39,10 +39,10 @@ Build an installable archive from the checkout:
 npm pack
 ```
 
-This produces `nstdata-ai-crawl-2.0.0.tgz`. Install it from a separate application directory:
+This produces `nstdata-ai-crawl-2.0.1.tgz`. Install it from a separate application directory:
 
 ```sh
-npm install /path/to/crawl-node/nstdata-ai-crawl-2.0.0.tgz
+npm install /path/to/crawl-node/nstdata-ai-crawl-2.0.1.tgz
 ```
 
 ## Publishing to npm

@@ -55,6 +55,9 @@ async function main() {
         process.exitCode = 1;
         return;
     }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
+    }
     console.log(markdown);
 }
 
@@ -77,6 +80,8 @@ node --env-file=.env quickstart.mts
 ```
 
 `.mts` runs directly on the supported Node.js versions, without a TypeScript runner or changes to your application's module type.
+
+If the service marks the result as truncated, the example warns on stderr and still prints the returned content.
 
 ## Choose a workflow
 
