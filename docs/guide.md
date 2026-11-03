@@ -98,6 +98,9 @@ async function main(taskId: string) {
         process.exitCode = 1;
         return;
     }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
+    }
     console.log(markdown);
 }
 main(taskId).catch(reportError);
@@ -194,6 +197,9 @@ async function main(crawlId: string) {
             process.exitCode = 1;
             return;
         }
+        if (page.data.truncated === true) {
+            console.error('Warning: service returned truncated content; output is partial.');
+        }
         console.log(page.url ?? '(page URL unavailable)', markdown);
     }
     console.error(JSON.stringify({ crawlId, afterCursor: pages.nextCursor ?? null }));
@@ -240,6 +246,9 @@ async function main() {
         console.error('No Markdown content was returned.');
         process.exitCode = 1;
         return;
+    }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
     }
     console.log(markdown);
 }
@@ -288,6 +297,9 @@ async function main() {
         process.exitCode = 1;
         return;
     }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
+    }
     console.log('Saved page.html and page.pdf');
 }
 main().catch(reportError);
@@ -310,7 +322,7 @@ Getters prefer inline content; otherwise they download the corresponding opaque 
 
 Invalid Unicode in inline raw text is rejected rather than replaced during UTF-8 encoding. Referenced raw data retains its original bytes.
 
-`metadata` contains available title, description, language, canonical URL, OpenGraph image and target status code. `truncated: true` indicates service truncation; an absent flag does not prove completeness. Optional response content and list `data` may be `null` or absent, so check the result before reading.
+`metadata` contains available title, description, language, canonical URL, OpenGraph image and target status code. `truncated: true` indicates service truncation; an absent flag does not prove completeness. The content examples warn on stderr when this flag is true and keep the returned content. Optional response content and list `data` may be `null` or absent, so check the result before reading.
 
 ## Request controls and errors
 

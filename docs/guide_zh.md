@@ -98,6 +98,9 @@ async function main(taskId: string) {
         process.exitCode = 1;
         return;
     }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
+    }
     console.log(markdown);
 }
 main(taskId).catch(reportError);
@@ -194,6 +197,9 @@ async function main(crawlId: string) {
             process.exitCode = 1;
             return;
         }
+        if (page.data.truncated === true) {
+            console.error('Warning: service returned truncated content; output is partial.');
+        }
         console.log(page.url ?? '(page URL unavailable)', markdown);
     }
     console.error(JSON.stringify({ crawlId, afterCursor: pages.nextCursor ?? null }));
@@ -240,6 +246,9 @@ async function main() {
         console.error('No Markdown content was returned.');
         process.exitCode = 1;
         return;
+    }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
     }
     console.log(markdown);
 }
@@ -288,6 +297,9 @@ async function main() {
         process.exitCode = 1;
         return;
     }
+    if (result.data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
+    }
     console.log('Saved page.html and page.pdf');
 }
 main().catch(reportError);
@@ -310,7 +322,7 @@ getter 优先使用内联内容，否则下载对应的不透明引用；不要�
 
 内联原始文本含无效 Unicode 时返回错误，不会用替换字符继续编码。通过引用读取的原始数据保留其原有字节。
 
-`metadata` 提供可用的标题、描述、语言、canonical URL、OpenGraph 图片和目标 HTTP 状态。`truncated: true` 表示服务截断；标记缺失不证明内容完整。响应正文和页面列表的可选 `data` 可以是 `null` 或缺失，读取前需检查结果。
+`metadata` 提供可用的标题、描述、语言、canonical URL、OpenGraph 图片和目标 HTTP 状态。`truncated: true` 表示服务截断；标记缺失不证明内容完整。读取正文的示例会在标记为 true 时向 stderr 提示，并保留返回内容。响应正文和页面列表的可选 `data` 可以是 `null` 或缺失，读取前需检查结果。
 
 ## 请求控制与错误
 

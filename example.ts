@@ -23,8 +23,12 @@ async function exampleBasicScrape(client: NstDataClient) {
         onlyMainContent: true,
         timeout: 60000,
     }, { maxResponseBytes: 1048576 });
-    const markdown = await resultData(res).getMarkdown();
+    const data = resultData(res);
+    const markdown = await data.getMarkdown();
     if (markdown === undefined) throw new WorkflowError('No Markdown content returned');
+    if (data.truncated === true) {
+        console.error('Warning: service returned truncated content; output is partial.');
+    }
     console.log(markdown);
 }
 
@@ -57,8 +61,12 @@ export async function exampleAsyncPolling(
             throw new WorkflowError('Scrape task failed');
         }
         if (res.status === TaskStatus.COMPLETED) {
-            const markdown = await resultData(res).getMarkdown();
+            const data = resultData(res);
+            const markdown = await data.getMarkdown();
             if (markdown === undefined) throw new WorkflowError('No Markdown content returned');
+            if (data.truncated === true) {
+                console.error('Warning: service returned truncated content; output is partial.');
+            }
             console.log(markdown);
             return;
         }
@@ -140,6 +148,9 @@ export async function exampleCrawl(
             const markdown = await page.data?.getMarkdown();
             if (markdown === undefined) {
                 throw new WorkflowError('No Markdown content returned for crawl page');
+            }
+            if (page.data?.truncated === true) {
+                console.error('Warning: service returned truncated content; output is partial.');
             }
             console.log(page.url ?? '(page URL unavailable)', markdown);
             pageCount++;
